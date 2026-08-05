@@ -6,14 +6,14 @@ High-performance, automated farming node agent for Twitch Drops Cluster.
 
 ### 🪟 Windows (PowerShell / Command Prompt)
 ```powershell
-git clone https://github.com/fools228/tdc-worker.git
+git clone https://github.com/Garoika/tdc-worker.git
 cd tdc-worker
 .\start_worker.bat
 ```
 
 ### 🐧 Linux (Ubuntu / Debian / CentOS)
 ```bash
-git clone https://github.com/fools228/tdc-worker.git
+git clone https://github.com/Garoika/tdc-worker.git
 cd tdc-worker
 bash start_worker.sh
 ```
