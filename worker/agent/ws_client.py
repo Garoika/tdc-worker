@@ -87,6 +87,9 @@ class WebSocketClient:
                 elif msg_type == 'STOP_CONTAINER':
                     asyncio.create_task(self.handle_stop_container(msg))
 
+                elif msg_type == 'STOP_ALL_CONTAINERS':
+                    asyncio.create_task(self.handle_stop_all_containers())
+
                 elif msg_type == 'START_AUTH_QUEUE':
                     accounts = msg.get('accounts', [])
                     asyncio.create_task(self.process_auth_queue(accounts))
@@ -146,6 +149,12 @@ class WebSocketClient:
             "container_id": cid,
             "event": "stopped" if success else "stop_failed"
         })
+
+    async def handle_stop_all_containers(self):
+        logger.info("Stopping all running containers on worker node")
+        containers = await self.docker.list_running_containers()
+        for c in containers:
+            await self.docker.stop_container(container_id=c['container_id'])
 
     async def process_auth_queue(self, accounts: list):
         """Process a queue of accounts for Twitch Device Code authorization, one at a time on port 5000."""
