@@ -215,6 +215,15 @@ class DockerManager:
                             k, v = e.split('=', 1)
                             env_dict[k] = v
                     login = labels.get('tdc.login') or env_dict.get('DOCKER_USER_ID', '')
+                    if not login:
+                        mounts = c.attrs.get('Mounts', [])
+                        for m in mounts:
+                            src = m.get('Source', '')
+                            if 'tdc_farm_' in src:
+                                parts = src.split('tdc_farm_')
+                                if len(parts) > 1:
+                                    login = parts[1].split('_')[0]
+                                    break
                     game = labels.get('tdc.game') or env_dict.get('DOCKER_GAME', '')
                     res.append({
                         'container_id': c.id,
