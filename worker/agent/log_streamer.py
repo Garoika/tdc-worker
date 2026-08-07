@@ -7,6 +7,9 @@ logger = logging.getLogger(__name__)
 class LogStreamer:
     def __init__(self, docker_manager: DockerManager):
         self.docker_manager = docker_manager
+        # User login pattern
+        self.user_re = re.compile(r'\[TwitchUser\s*-\s*([a-zA-Z0-9_]+)\]', re.IGNORECASE)
+        
         # Patterns for progress: 88/120, 88 / 120 min, 88 of 120, (73%), Progress: 88/120
         self.prog_re1 = re.compile(r'(\d+)\s*(?:/|of)\s*(\d+)', re.IGNORECASE)
         self.prog_pct_re = re.compile(r'(\d+(?:\.\d+)?)\s*%', re.IGNORECASE)
@@ -31,6 +34,11 @@ class LogStreamer:
             line_str = line.strip()
             if not line_str:
                 continue
+
+            # 0. Account login parsing
+            u_match = self.user_re.search(line_str)
+            if u_match:
+                telemetry['account_login'] = u_match.group(1).strip()
 
             # 1. Progress parsing
             prog_match = self.prog_re1.search(line_str)

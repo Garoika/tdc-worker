@@ -331,11 +331,12 @@ class WebSocketClient:
                         
                     telemetry = await self.log_streamer.process_container_logs(cid, LOG_TAIL_LINES)
                     if telemetry:
+                        login = c.get('login') or telemetry.get('account_login', '')
                         await self.send({
                             "type": "TELEMETRY_UPDATE",
                             "container_id": cid,
                             "container_name": c.get('name', ''),
-                            "account_login": c.get('login', ''),
+                            "account_login": login,
                             "game": c.get('game', ''),
                             "telemetry": telemetry
                         })
