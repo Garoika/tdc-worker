@@ -92,6 +92,13 @@ class DockerManager:
         mem_limit_mb = limits.get('memory_limit_mb', 512)
         mem_limit = f'{mem_limit_mb}m'
         
+        labels = {
+            'tdc.login': login,
+            'tdc.job_id': str(job_id),
+            'tdc.game': game,
+            'tdc.account_id': str(account.get('id', ''))
+        }
+        
         logger.info(f"Spawning container {name} for user {login} watching {game}")
         loop = asyncio.get_running_loop()
         
@@ -100,6 +107,7 @@ class DockerManager:
                 image=DOCKER_IMAGE,
                 name=name,
                 environment=env,
+                labels=labels,
                 volumes={
                     temp_dir: {'bind': '/app/Configuration', 'mode': 'rw'}
                 },
@@ -196,8 +204,27 @@ class DockerManager:
         loop = asyncio.get_running_loop()
         def _list():
             containers = self.client.containers.list(filters={"status": "running"})
-            return [{'container_id': c.id, 'name': c.name, 'status': c.status} 
-                    for c in containers if c.name.startswith('tdc-farm-') or c.name.startswith('tdc-auth-')]
+            res = []
+            for c in containers:
+                if c.name.startswith('tdc-farm-') or c.name.startswith('tdc-auth-'):
+                    labels = c.labels or {}
+                    env_list = c.attrs.get('Config', {}).get('Env', [])
+                    env_dict = {}
+                    for e in env_list:
+                        if '=' in e:
+                            k, v = e.split('=', 1)
+                            env_dict[k] = v
+                    login = labels.get('tdc.login') or env_dict.get('DOCKER_USER_ID', '')
+                    game = labels.get('tdc.game') or env_dict.get('DOCKER_GAME', '')
+                    res.append({
+                        'container_id': c.id,
+                        'name': c.name,
+                        'status': c.status,
+                        'login': login,
+                        'game': game,
+                        'labels': labels
+                    })
+            return res
         return await loop.run_in_executor(None, _list)
 
     async def get_running_container_count(self) -> int:

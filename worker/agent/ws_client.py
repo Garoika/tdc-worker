@@ -335,6 +335,8 @@ class WebSocketClient:
                             "type": "TELEMETRY_UPDATE",
                             "container_id": cid,
                             "container_name": c.get('name', ''),
+                            "account_login": c.get('login', ''),
+                            "game": c.get('game', ''),
                             "telemetry": telemetry
                         })
                     await asyncio.sleep(0.1)
