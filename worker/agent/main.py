@@ -18,6 +18,7 @@ async def main():
     
     metrics = SystemMetrics()
     docker_manager = DockerManager()
+    docker_manager.ensure_farmer_image()
     ws_client = WebSocketClient(MASTER_URL, WORKER_TOKEN, docker_manager, metrics)
     autoupdater = AutoUpdater(check_interval=60)
     

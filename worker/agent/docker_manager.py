@@ -12,6 +12,22 @@ class DockerManager:
     def __init__(self):
         self.client = docker.from_env()
 
+    def ensure_farmer_image(self):
+        """Verify and pull the latest Farmer Docker image on worker startup."""
+        try:
+            logger.info(f"Checking Farmer image: {DOCKER_IMAGE}...")
+            try:
+                local_img = self.client.images.get(DOCKER_IMAGE)
+                img_id = local_img.short_id if hasattr(local_img, 'short_id') else local_img.id[:12]
+                logger.info(f"Farmer image verified: {DOCKER_IMAGE} (ID: {img_id})")
+            except docker.errors.ImageNotFound:
+                logger.info(f"Farmer image {DOCKER_IMAGE} not found locally. Pulling latest from Docker Hub...")
+                pulled = self.client.images.pull(DOCKER_IMAGE)
+                p_id = pulled.short_id if hasattr(pulled, 'short_id') else pulled.id[:12]
+                logger.info(f"Successfully pulled latest Farmer image: {p_id}")
+        except Exception as e:
+            logger.warning(f"Could not verify/pull Farmer image: {e}")
+
     async def spawn_container(self, job_id: str, account: dict, target: dict, limits: dict) -> str:
         login = account.get('login', f'job_{job_id[:8]}')
         name = f'tdc-farm-{job_id[:8]}'
