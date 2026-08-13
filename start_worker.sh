@@ -99,8 +99,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo " Worker First-Time Setup"
     echo "------------------------------------------"
     echo ""
-    read -p "Enter Master Server WS URL (default ws://localhost:8000/ws/workers): " MASTER_INPUT
-    MASTER_INPUT="${MASTER_INPUT:-ws://localhost:8000/ws/workers}"
+    read -p "Enter Master Server WS URL (default ws://185.104.248.62/ws/workers): " MASTER_INPUT
+    MASTER_INPUT="${MASTER_INPUT:-ws://185.104.248.62/ws/workers}"
 
     echo ""
     echo " Please register a worker in Dashboard:"
@@ -115,32 +115,48 @@ if [ ! -f "$CONFIG_FILE" ]; then
 
     read -p "Enter Worker Public/LAN IP (optional): " IP_INPUT
     
-    echo "{\"master_url\": \"$MASTER_INPUT\", \"worker_token\": \"$TOKEN_INPUT\", \"worker_public_ip\": \"$IP_INPUT\"}" > "$CONFIG_FILE"
+    cat <<EOF > "$CONFIG_FILE"
+{
+  "master_url": "$MASTER_INPUT",
+  "worker_token": "$TOKEN_INPUT",
+  "worker_public_ip": "$IP_INPUT"
+}
+EOF
 fi
 
-MASTER_URL=$(grep -o '"master_url":"[^"]*' "$CONFIG_FILE" | grep -o '[^"]*$')
-WORKER_TOKEN=$(grep -o '"worker_token":"[^"]*' "$CONFIG_FILE" | grep -o '[^"]*$')
-WORKER_PUBLIC_IP=$(grep -o '"worker_public_ip":"[^"]*' "$CONFIG_FILE" | grep -o '[^"]*$')
+# Robust JSON extraction using Python
+MASTER_URL=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('master_url', ''))" 2>/dev/null)
+WORKER_TOKEN=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('worker_token', ''))" 2>/dev/null)
+WORKER_PUBLIC_IP=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('worker_public_ip', ''))" 2>/dev/null)
 
-MASTER_URL="${MASTER_URL:-ws://localhost:8000/ws/workers}"
+MASTER_URL="${MASTER_URL:-ws://185.104.248.62/ws/workers}"
+
+# Auto-fix port 8000 if master is behind nginx
+if [[ "$MASTER_URL" == *":8000/ws/workers"* ]]; then
+    MASTER_URL="${MASTER_URL//:8000\/ws\/workers/\/ws\/workers}"
+fi
 
 echo "      [OK] Config loaded: $MASTER_URL"
+
+# Ensure docker image is tagged locally under both names
+docker tag fools228/tdc-farmer:latest tdc-farmer:latest 2>/dev/null || true
 
 # 5. Start Worker Agent
 echo ""
 echo "=========================================="
 echo " Master WS: $MASTER_URL"
-echo " Image:     tdc-farmer:latest"
+echo " Image:     fools228/tdc-farmer:latest"
 echo "=========================================="
 echo ""
 
 export MASTER_URL="$MASTER_URL"
 export WORKER_TOKEN="$WORKER_TOKEN"
 export WORKER_PUBLIC_IP="$WORKER_PUBLIC_IP"
-export DOCKER_IMAGE="tdc-farmer:latest"
+export DOCKER_IMAGE="fools228/tdc-farmer:latest"
 export PYTHONUNBUFFERED=1
 
 cd "$SCRIPT_DIR/worker"
 exec "$RUN_PYTHON" -m agent.main
+
 
 
