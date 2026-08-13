@@ -43,17 +43,22 @@ else
     echo "      [OK] Docker image fools228/tdc-farmer:latest is ready"
 fi
 
-# 3. Setup Python dependencies
+# 3. Setup Python venv & dependencies
 echo ""
-echo "[3/4] Checking Python dependencies..."
+echo "[3/4] Checking Python virtual environment..."
 cd worker
-if command -v pip3 &>/dev/null; then
-    pip3 install -q -r requirements.txt
-elif command -v pip &>/dev/null; then
-    pip install -q -r requirements.txt
+
+VENV_DIR="$SCRIPT_DIR/worker/.venv"
+if [ ! -d "$VENV_DIR" ]; then
+    echo "      [INFO] Creating virtual environment..."
+    python3 -m venv "$VENV_DIR" 2>/dev/null || python -m venv "$VENV_DIR"
 fi
+
+# Activate venv and install deps
+source "$VENV_DIR/bin/activate"
+pip install -q -r requirements.txt
 cd "$SCRIPT_DIR"
-echo "      [OK] Dependencies ready"
+echo "      [OK] Dependencies ready (venv)"
 
 # 4. Config & Worker Token Setup
 echo ""
@@ -104,8 +109,5 @@ export WORKER_PUBLIC_IP="$WORKER_PUBLIC_IP"
 export DOCKER_IMAGE="tdc-farmer:latest"
 
 cd worker
-if command -v python3 &>/dev/null; then
-    python3 -m agent.main
-else
-    python -m agent.main
-fi
+python -m agent.main
+
