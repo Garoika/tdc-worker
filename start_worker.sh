@@ -45,20 +45,51 @@ fi
 
 # 3. Setup Python venv & dependencies
 echo ""
-echo "[3/4] Checking Python virtual environment..."
-cd worker
+echo "[3/4] Checking Python environment & dependencies..."
 
-VENV_DIR="$SCRIPT_DIR/worker/.venv"
-if [ ! -d "$VENV_DIR" ]; then
-    echo "      [INFO] Creating virtual environment..."
-    python3 -m venv "$VENV_DIR" 2>/dev/null || python -m venv "$VENV_DIR"
+# Determine python command
+PYTHON_CMD=""
+if command -v python3 &>/dev/null; then
+    PYTHON_CMD="python3"
+elif command -v python &>/dev/null; then
+    PYTHON_CMD="python"
+else
+    echo "[ERROR] Python 3 is not installed! Please install python3 (e.g. sudo apt install -y python3 python3-venv python3-pip)"
+    exit 1
 fi
 
-# Activate venv and install deps
-source "$VENV_DIR/bin/activate"
-pip install -q -r requirements.txt
-cd "$SCRIPT_DIR"
-echo "      [OK] Dependencies ready (venv)"
+VENV_DIR="$SCRIPT_DIR/worker/.venv"
+
+# Function to setup venv
+setup_venv() {
+    if [ ! -d "$VENV_DIR" ] || [ ! -f "$VENV_DIR/bin/python" ]; then
+        echo "      [INFO] Creating Python virtual environment in $VENV_DIR..."
+        rm -rf "$VENV_DIR" 2>/dev/null
+        if ! $PYTHON_CMD -m venv "$VENV_DIR" 2>/dev/null; then
+            echo "      [WARN] Standard venv creation failed. Checking for python3-venv..."
+            if command -v apt-get &>/dev/null && command -v sudo &>/dev/null; then
+                echo "      [INFO] Attempting to install python3-venv and python3-pip via apt..."
+                sudo apt-get update -qq && sudo apt-get install -y -qq python3-venv python3-pip 2>/dev/null
+                $PYTHON_CMD -m venv "$VENV_DIR" 2>/dev/null
+            fi
+        fi
+    fi
+}
+
+setup_venv
+
+if [ -f "$VENV_DIR/bin/python" ]; then
+    RUN_PYTHON="$VENV_DIR/bin/python"
+    echo "      [INFO] Installing/updating dependencies in venv..."
+    "$VENV_DIR/bin/pip" install --upgrade pip -q 2>/dev/null
+    "$VENV_DIR/bin/pip" install -q -r "$SCRIPT_DIR/worker/requirements.txt"
+    echo "      [OK] Virtual environment ready ($RUN_PYTHON)"
+else
+    echo "      [WARN] Could not create venv. Falling back to system python..."
+    RUN_PYTHON="$PYTHON_CMD"
+    $PYTHON_CMD -m pip install -q -r "$SCRIPT_DIR/worker/requirements.txt" --break-system-packages 2>/dev/null || \
+    $PYTHON_CMD -m pip install -q -r "$SCRIPT_DIR/worker/requirements.txt" 2>/dev/null || true
+fi
 
 # 4. Config & Worker Token Setup
 echo ""
@@ -107,7 +138,9 @@ export MASTER_URL="$MASTER_URL"
 export WORKER_TOKEN="$WORKER_TOKEN"
 export WORKER_PUBLIC_IP="$WORKER_PUBLIC_IP"
 export DOCKER_IMAGE="tdc-farmer:latest"
+export PYTHONUNBUFFERED=1
 
-cd worker
-python -m agent.main
+cd "$SCRIPT_DIR/worker"
+exec "$RUN_PYTHON" -m agent.main
+
 

@@ -40,13 +40,29 @@ if errorlevel 1 (
 
 :: 3. Setup Python dependencies & Start Agent
 echo.
-echo [3/3] Starting Worker Agent...
+echo [3/3] Setting up Python environment ^& Starting Worker Agent...
 cd /d "%~dp0worker"
-pip install -q -r requirements.txt
-set PYTHONUNBUFFERED=1
-python -m agent.main
+
+if not exist ".venv" (
+    echo       [INFO] Creating Python virtual environment...
+    python -m venv .venv 2>nul
+)
+
+if exist ".venv\Scripts\python.exe" (
+    echo       [INFO] Using virtual environment...
+    .venv\Scripts\python.exe -m pip install -q --upgrade pip 2>nul
+    .venv\Scripts\python.exe -m pip install -q -r requirements.txt
+    set PYTHONUNBUFFERED=1
+    .venv\Scripts\python.exe -m agent.main
+) else (
+    echo       [INFO] Using system python...
+    pip install -q -r requirements.txt
+    set PYTHONUNBUFFERED=1
+    python -m agent.main
+)
 
 echo.
 color 0C
 echo  Worker stopped. Press any key to exit.
 pause >nul
+
