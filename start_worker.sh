@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # ===================================================
-# Twitch Drops Cluster (TDC) — Native Linux Worker Script
+# Twitch Drops Cluster (TDC) — Linux Worker Node Starter
+# Self-healing, auto-dependency installation & auto-update
 # ===================================================
+
+set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
@@ -13,26 +16,150 @@ echo "   Twitch Drops Cluster — LINUX WORKER"
 echo "=========================================="
 echo ""
 
-# 1. Check Docker
-echo "[1/4] Checking Docker..."
-if ! command -v docker &> /dev/null; then
-    echo "[INFO] Docker is not installed. Installing Docker..."
-    curl -fsSL https://get.docker.com | sh
-    sudo systemctl enable --now docker
+# Helper function to run commands with root privileges
+run_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif command -v sudo &>/dev/null; then
+        sudo "$@"
+    else
+        echo "[ERROR] Root privileges required for: $*"
+        echo "Please install sudo or run as root."
+        exit 1
+    fi
+}
+
+# 1. System Package Manager Detection & Dependency Installation
+echo "[1/5] Checking system packages (curl, git, python3, venv, pip)..."
+
+MISSING_PKGS=()
+
+if ! command -v curl &>/dev/null; then
+    MISSING_PKGS+=("curl")
 fi
 
-if ! docker info &> /dev/null; then
-    echo "[INFO] Starting Docker daemon..."
-    sudo systemctl start docker
+if ! command -v git &>/dev/null; then
+    MISSING_PKGS+=("git")
 fi
-echo "      [OK] Docker is running"
 
-# 2. Check & Pull/Build Farmer Docker Image if missing
+if ! command -v python3 &>/dev/null; then
+    MISSING_PKGS+=("python3")
+fi
+
+# Check for python3-venv / pip
+if command -v python3 &>/dev/null; then
+    if ! python3 -m venv --help &>/dev/null; then
+        MISSING_PKGS+=("python3-venv")
+    fi
+    if ! python3 -m pip --version &>/dev/null; then
+        MISSING_PKGS+=("python3-pip")
+    fi
+fi
+
+if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
+    echo "      [INFO] Missing packages detected: ${MISSING_PKGS[*]}"
+    echo "      [INFO] Installing system dependencies..."
+
+    if command -v apt-get &>/dev/null; then
+        run_root apt-get update -qq
+        APT_INSTALL=()
+        for pkg in "${MISSING_PKGS[@]}"; do
+            case "$pkg" in
+                curl) APT_INSTALL+=("curl" "ca-certificates") ;;
+                git) APT_INSTALL+=("git") ;;
+                python3) APT_INSTALL+=("python3") ;;
+                python3-venv) APT_INSTALL+=("python3-venv") ;;
+                python3-pip) APT_INSTALL+=("python3-pip") ;;
+                *) APT_INSTALL+=("$pkg") ;;
+            esac
+        done
+        run_root apt-get install -y "${APT_INSTALL[@]}"
+    elif command -v dnf &>/dev/null; then
+        run_root dnf install -y curl git python3 python3-pip
+    elif command -v pacman &>/dev/null; then
+        run_root pacman -Sy --noconfirm curl git python python-pip
+    elif command -v zypper &>/dev/null; then
+        run_root zypper install -y curl git python3 python3-pip
+    else
+        echo "      [WARN] Unsupported package manager. Please manually install: ${MISSING_PKGS[*]}"
+    fi
+    echo "      [OK] System packages installed successfully."
+else
+    echo "      [OK] System packages (curl, git, python3, venv, pip) are ready."
+fi
+
+# 2. Check & Auto-Update Worker Repo via Git
 echo ""
-echo "[2/4] Checking Farmer Docker Image (fools228/tdc-farmer:latest)..."
-if ! docker image inspect fools228/tdc-farmer:latest &> /dev/null; then
+echo "[2/5] Checking for updates from GitHub..."
+if [ -d ".git" ] && command -v git &>/dev/null; then
+    # Fix safe directory in case ownership differs
+    git config --global --add safe.directory "$SCRIPT_DIR" 2>/dev/null || true
+    echo "      [INFO] Pulling latest changes..."
+    git pull --quiet 2>/dev/null || true
+    echo "      [OK] Worker repository up to date."
+else
+    echo "      [INFO] Not a git repository or git unavailable. Skipping auto-update."
+fi
+
+# 3. Docker Installation & Daemon Check
+echo ""
+echo "[3/5] Checking Docker & Docker daemon..."
+
+if ! command -v docker &>/dev/null; then
+    echo "      [INFO] Docker is not installed. Installing official Docker..."
+    if command -v curl &>/dev/null; then
+        curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+        run_root sh /tmp/get-docker.sh
+        rm -f /tmp/get-docker.sh
+    else
+        echo "[ERROR] curl is required to install Docker."
+        exit 1
+    fi
+fi
+
+# Ensure docker service is running
+if command -v systemctl &>/dev/null; then
+    if ! systemctl is-active --quiet docker 2>/dev/null; then
+        echo "      [INFO] Starting & enabling Docker service..."
+        run_root systemctl enable --now docker
+    fi
+elif command -v service &>/dev/null; then
+    run_root service docker start 2>/dev/null || true
+fi
+
+# Ensure current user is in docker group
+if [ "$(id -u)" -ne 0 ] && [ -n "$USER" ]; then
+    if ! groups "$USER" 2>/dev/null | grep -q '\bdocker\b'; then
+        echo "      [INFO] Adding user $USER to docker group..."
+        run_root usermod -aG docker "$USER" 2>/dev/null || true
+    fi
+fi
+
+# Fix socket permissions if needed for immediate execution
+if [ -e /var/run/docker.sock ]; then
+    if ! docker info &>/dev/null; then
+        run_root chmod 666 /var/run/docker.sock 2>/dev/null || true
+    fi
+fi
+
+if ! docker info &>/dev/null; then
+    echo "      [WARN] Could not connect to Docker daemon as $USER. Attempting socket fix..."
+    run_root chmod 666 /var/run/docker.sock 2>/dev/null || true
+fi
+
+if ! docker info &>/dev/null; then
+    echo "[ERROR] Docker is still not running or accessible. Please check 'sudo systemctl status docker'."
+    exit 1
+fi
+
+echo "      [OK] Docker is running and ready."
+
+# 4. Check & Pull/Build Farmer Docker Image
+echo ""
+echo "[4/5] Checking Farmer Docker Image (fools228/tdc-farmer:latest)..."
+if ! docker image inspect fools228/tdc-farmer:latest &>/dev/null; then
     echo "      [INFO] Pulling fools228/tdc-farmer:latest from Docker Hub..."
-    if ! docker pull fools228/tdc-farmer:latest &> /dev/null; then
+    if ! docker pull fools228/tdc-farmer:latest; then
         echo "      [INFO] Docker Hub pull failed. Building local Docker image..."
         cd farmer
         docker build -t fools228/tdc-farmer:latest .
@@ -40,39 +167,21 @@ if ! docker image inspect fools228/tdc-farmer:latest &> /dev/null; then
     fi
     echo "      [OK] Docker image ready!"
 else
-    echo "      [OK] Docker image fools228/tdc-farmer:latest is ready"
+    echo "      [OK] Docker image fools228/tdc-farmer:latest is ready."
 fi
+docker tag fools228/tdc-farmer:latest tdc-farmer:latest 2>/dev/null || true
 
-# 3. Setup Python venv & dependencies
+# 5. Setup Python Virtual Environment & Dependencies
 echo ""
-echo "[3/4] Checking Python environment & dependencies..."
-
-# Determine python command
-PYTHON_CMD=""
-if command -v python3 &>/dev/null; then
-    PYTHON_CMD="python3"
-elif command -v python &>/dev/null; then
-    PYTHON_CMD="python"
-else
-    echo "[ERROR] Python 3 is not installed! Please install python3 (e.g. sudo apt install -y python3 python3-venv python3-pip)"
-    exit 1
-fi
+echo "[5/5] Checking Python environment & Worker Agent..."
 
 VENV_DIR="$SCRIPT_DIR/worker/.venv"
 
-# Function to setup venv
 setup_venv() {
     if [ ! -d "$VENV_DIR" ] || [ ! -f "$VENV_DIR/bin/python" ]; then
         echo "      [INFO] Creating Python virtual environment in $VENV_DIR..."
-        rm -rf "$VENV_DIR" 2>/dev/null
-        if ! $PYTHON_CMD -m venv "$VENV_DIR" 2>/dev/null; then
-            echo "      [WARN] Standard venv creation failed. Checking for python3-venv..."
-            if command -v apt-get &>/dev/null && command -v sudo &>/dev/null; then
-                echo "      [INFO] Attempting to install python3-venv and python3-pip via apt..."
-                sudo apt-get update -qq && sudo apt-get install -y -qq python3-venv python3-pip 2>/dev/null
-                $PYTHON_CMD -m venv "$VENV_DIR" 2>/dev/null
-            fi
-        fi
+        rm -rf "$VENV_DIR" 2>/dev/null || true
+        python3 -m venv "$VENV_DIR"
     fi
 }
 
@@ -80,21 +189,20 @@ setup_venv
 
 if [ -f "$VENV_DIR/bin/python" ]; then
     RUN_PYTHON="$VENV_DIR/bin/python"
-    echo "      [INFO] Installing/updating dependencies in venv..."
-    "$VENV_DIR/bin/pip" install --upgrade pip -q 2>/dev/null
+    echo "      [INFO] Installing/updating Python dependencies in venv..."
+    "$VENV_DIR/bin/pip" install --upgrade pip -q 2>/dev/null || true
     "$VENV_DIR/bin/pip" install -q -r "$SCRIPT_DIR/worker/requirements.txt"
     echo "      [OK] Virtual environment ready ($RUN_PYTHON)"
 else
-    echo "      [WARN] Could not create venv. Falling back to system python..."
-    RUN_PYTHON="$PYTHON_CMD"
-    $PYTHON_CMD -m pip install -q -r "$SCRIPT_DIR/worker/requirements.txt" --break-system-packages 2>/dev/null || \
-    $PYTHON_CMD -m pip install -q -r "$SCRIPT_DIR/worker/requirements.txt" 2>/dev/null || true
+    echo "      [WARN] Could not create venv. Falling back to system python3..."
+    RUN_PYTHON="python3"
+    python3 -m pip install -q -r "$SCRIPT_DIR/worker/requirements.txt" --break-system-packages 2>/dev/null || \
+    python3 -m pip install -q -r "$SCRIPT_DIR/worker/requirements.txt" 2>/dev/null || true
 fi
 
-# 4. Config & Worker Token Setup
-echo ""
-echo "[4/4] Checking Worker Configuration..."
+# Config & Worker Token Setup
 if [ ! -f "$CONFIG_FILE" ]; then
+    echo ""
     echo "------------------------------------------"
     echo " Worker First-Time Setup"
     echo "------------------------------------------"
@@ -124,7 +232,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
 EOF
 fi
 
-# Robust JSON extraction using Python
+# Extract JSON configuration using Python
 MASTER_URL=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('master_url', ''))" 2>/dev/null)
 WORKER_TOKEN=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('worker_token', ''))" 2>/dev/null)
 WORKER_PUBLIC_IP=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('worker_public_ip', ''))" 2>/dev/null)
@@ -138,12 +246,10 @@ fi
 
 echo "      [OK] Config loaded: $MASTER_URL"
 
-# Ensure docker image is tagged locally under both names
-docker tag fools228/tdc-farmer:latest tdc-farmer:latest 2>/dev/null || true
-
-# 5. Start Worker Agent
+# Start Worker Agent
 echo ""
 echo "=========================================="
+echo " 🚀 Starting Twitch Drops Farm Worker Node"
 echo " Master WS: $MASTER_URL"
 echo " Image:     fools228/tdc-farmer:latest"
 echo "=========================================="
@@ -157,6 +263,3 @@ export PYTHONUNBUFFERED=1
 
 cd "$SCRIPT_DIR/worker"
 exec "$RUN_PYTHON" -m agent.main
-
-
-
