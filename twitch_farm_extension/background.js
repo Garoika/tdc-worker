@@ -134,6 +134,8 @@ function clearProxyConfig() {
     });
 }
 
+let lastUserCode = null;
+
 async function checkServerStatus() {
     try {
         const res = await fetch(`${SERVER_URL}/api/current`, { cache: "no-store" });
@@ -142,6 +144,7 @@ async function checkServerStatus() {
                 console.log("[Background] ⚠️ Server status returned HTTP " + res.status);
             }
             isServerOnline = false;
+            lastUserCode = null;
             clearProxyConfig();
             return;
         }
@@ -153,15 +156,17 @@ async function checkServerStatus() {
             clearProxyConfig();
         }
         
-        if (data && (data.user_code || data.auth_token) && !isServerOnline) {
+        if (data && data.user_code && data.user_code !== lastUserCode) {
+            lastUserCode = data.user_code;
             isServerOnline = true;
-            console.log(`[Background] 🚀 Python Server ONLINE! Code: ${data.user_code}, Proxy: ${data.proxy ? (data.proxy.protocol || 'http') + '://' + data.proxy.host + ':' + data.proxy.port : 'direct'}`);
+            console.log(`[Background] 🚀 Account transition / new code detected: ${data.user_code}, Proxy: ${data.proxy ? (data.proxy.protocol || 'http') + '://' + data.proxy.host + ':' + data.proxy.port : 'direct'}`);
             openOrFocusTwitchActivate(data.user_code);
         } else if (data && (data.status === "finished" || data.status === "waiting")) {
             if (isServerOnline) {
                 console.log("[Background] 🏁 Auth finished or waiting.");
             }
             isServerOnline = false;
+            lastUserCode = null;
             clearProxyConfig();
         }
     } catch (e) {
@@ -169,6 +174,7 @@ async function checkServerStatus() {
             console.log("[Background] 🔌 Server disconnected:", e.message);
         }
         isServerOnline = false;
+        lastUserCode = null;
         clearProxyConfig();
     }
 }
