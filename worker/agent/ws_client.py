@@ -284,11 +284,14 @@ class WebSocketClient:
                 # Always clean up the container
                 if container:
                     try:
+                        cname = getattr(container, 'name', container.id)
+                        logger.info(f"Stopping and cleaning up auth container {cname}...")
                         await self.docker.stop_container(container.id)
-                    except Exception:
-                        pass
+                        logger.info(f"Auth container {cname} successfully stopped and removed.")
+                    except Exception as e:
+                        logger.error(f"Error stopping auth container: {e}")
 
-        logger.info("Auth queue processing complete")
+        logger.info("✨ Auth queue processing complete! All containers cleaned up.")
         await self.send({
             "type": "ACCOUNT_AUTH_COMPLETE"
         })
