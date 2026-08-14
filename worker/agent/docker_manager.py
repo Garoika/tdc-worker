@@ -280,9 +280,8 @@ class DockerManager:
                 image=DOCKER_IMAGE,
                 name=name,
                 environment=env,
-                ports={'5000/tcp': 5000},
+                network_mode='host',
                 volumes={config_dir: {'bind': '/app/Configuration', 'mode': 'rw'}},
-                dns=['8.8.8.8', '1.1.1.1'],
                 detach=True
             )
             
