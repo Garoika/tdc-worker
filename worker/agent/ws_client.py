@@ -219,9 +219,9 @@ class WebSocketClient:
                 self.current_auth_container = container
                 logger.info(f"Auth container launched for {login}, waiting for Chrome extension...")
                 
-                # Poll config file for ClientSecret (up to 180 seconds)
+                # Poll config file for ClientSecret (up to 10 minutes)
                 success = False
-                for _ in range(90):
+                for _ in range(300):
                     if self.auth_cancelled:
                         break
                     if os.path.exists(config_file):
@@ -261,7 +261,7 @@ class WebSocketClient:
                         "login": login,
                         "current": idx,
                         "total": total,
-                        "error": "Timed out waiting for Chrome extension authorization (3 min)"
+                        "error": "Timed out waiting for Chrome extension authorization (10 min)"
                     })
                     
             except Exception as e:

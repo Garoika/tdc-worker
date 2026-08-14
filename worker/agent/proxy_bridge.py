@@ -238,7 +238,8 @@ class ProxyBridge:
                     if not data:
                         break
                     writer.write(data)
-                    await writer.drain()
+                    if writer.transport and writer.transport.get_write_buffer_size() > 131072:
+                        await writer.drain()
             except Exception:
                 pass
             finally:
