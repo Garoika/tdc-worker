@@ -206,13 +206,19 @@ function renderFloatingPanel(index, password) {
 }
 
 async function handleAccountFlow() {
+    console.log("%c[Twitch Farm Helper] 🚀 Extension active on page", "color: #9146FF; font-weight: bold; font-size: 12px;");
     try {
         // Check if server is active FIRST before doing any redirects or script execution
         const data = await apiFetch('/api/current');
 
-        // If server is not in active farm session, do NOT interfere with user browsing
         if (!data || data.status === "finished" || data.status === "waiting") {
+            console.log("[Twitch Farm Helper] ℹ️ Auth server not active (waiting for worker queue...)");
             return;
+        }
+
+        console.log(`%c[Twitch Farm Helper] 🟢 Auth Server Connected! Account: ${data.login || data.index}, UserCode: ${data.user_code}`, "color: #2cf6b3; font-weight: bold; font-size: 13px;");
+        if (data.proxy) {
+            console.log(`[Twitch Farm Helper] 🌐 Proxy configured via bridge (${data.proxy.protocol || 'http'}://${data.proxy.host}:${data.proxy.port})`);
         }
 
         // Only redirect when server is running and processing an account
@@ -390,11 +396,13 @@ function startAutoClicker(password, login) {
         if (isClickPending) return;
 
         const findButtonByText = (texts) => {
-            const buttons = Array.from(document.querySelectorAll('button, a'));
-            return buttons.find(b => texts.some(t => {
+            const buttons = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
+            return buttons.find(b => {
+                const bTarget = (b.getAttribute("data-a-target") || "").toLowerCase();
+                if (bTarget === "consent-accept-button" || bTarget === "authorize-button") return true;
                 const bText = (b.innerText || b.textContent || "").toLowerCase().trim();
-                return bText === t.toLowerCase() || bText.includes(t.toLowerCase());
-            }));
+                return texts.some(t => bText === t.toLowerCase() || bText.includes(t.toLowerCase()));
+            });
         };
 
         const pwdInput = document.querySelector('input[type="password"]');
@@ -402,86 +410,72 @@ function startAutoClicker(password, login) {
         
         if (pwdInput && !userInput && document.body.contains(pwdInput)) {
             if (pwdInput.value !== password && password) {
-                console.log("[Auto-Clicker] Typing password for Verification...");
+                console.log("[Auto-Clicker] 🔑 Typing password for Verification...");
                 pwdInput.value = password;
                 pwdInput.dispatchEvent(new Event('input', { bubbles: true }));
                 pwdInput.dispatchEvent(new Event('change', { bubbles: true }));
                 
                 isClickPending = true;
                 setTimeout(() => {
-                    const verifyBtn = findButtonByText(["Verify", "Подтвердить"]);
+                    const verifyBtn = findButtonByText(["Verify", "Подтвердить", "Confirm"]);
                     if (verifyBtn && !verifyBtn.disabled) {
-                        console.log("[Auto-Clicker] Clicking Verify...");
+                        console.log("[Auto-Clicker] 👉 Clicking Verify...");
                         verifyBtn.click();
                     }
                     isClickPending = false;
-                }, Math.floor(Math.random() * 500) + 500);
+                }, Math.floor(Math.random() * 400) + 400);
             }
             return;
         }
 
         const activateBtn = findButtonByText(["Activate", "Активировать"]);
         if (activateBtn && !activateBtn.disabled && activateBtn.getAttribute("aria-disabled") !== "true") {
-            console.log("[Auto-Clicker] Preparing to click Activate...");
+            console.log("[Auto-Clicker] 👉 Found Activate button. Clicking...");
             isClickPending = true;
             setTimeout(() => {
                 if (document.body.contains(activateBtn)) {
-                    console.log("[Auto-Clicker] Clicking Activate...");
+                    activateBtn.focus();
                     activateBtn.click();
                 }
                 isClickPending = false;
-            }, Math.floor(Math.random() * 500) + 500);
+            }, Math.floor(Math.random() * 400) + 400);
             return;
         }
 
         const remindBtn = findButtonByText(["Remind me later", "Напомнить позже"]);
         if (remindBtn && !remindBtn.disabled && remindBtn.getAttribute("aria-disabled") !== "true") {
-            console.log("[Auto-Clicker] Preparing to click Remind me later...");
+            console.log("[Auto-Clicker] 👉 Clicking Remind me later...");
             isClickPending = true;
             setTimeout(() => {
                 if (document.body.contains(remindBtn)) {
-                    console.log("[Auto-Clicker] Clicking Remind me later...");
                     remindBtn.click();
                 }
                 isClickPending = false;
-            }, Math.floor(Math.random() * 500) + 500);
+            }, Math.floor(Math.random() * 400) + 400);
             return;
         }
 
-        const authBtn = findButtonByText(["Authorize", "Разрешить"]);
+        const authBtn = findButtonByText(["Authorize", "Разрешить", "Allow", "Consent", "Подтвердить"]);
         if (authBtn) {
-            // Emulate user activity globally to "wake up" Twitch's UI and enable the button
             window.dispatchEvent(new Event('focus', { bubbles: true }));
             document.dispatchEvent(new Event('focus', { bubbles: true }));
-            document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window, clientX: 200, clientY: 200 }));
             
             if (!authBtn.disabled && authBtn.getAttribute("aria-disabled") !== "true") {
-                console.log("[Auto-Clicker] Preparing to click Authorize...");
+                console.log("[Auto-Clicker] 🎯 Found Authorize button! Triggering click...");
                 isClickPending = true;
                 setTimeout(() => {
                     if (document.body.contains(authBtn)) {
-                        console.log("[Auto-Clicker] Emulating user interaction on button before click...");
-                        
-                        authBtn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
-                        authBtn.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window }));
-                        authBtn.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window, clientX: 100, clientY: 100 }));
                         authBtn.focus();
-                        
-                        setTimeout(() => {
-                            console.log("[Auto-Clicker] Clicking Authorize...");
-                            authBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-                            authBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-                            authBtn.click();
-                            isClickPending = false;
-                        }, 300);
-                    } else {
-                        isClickPending = false;
+                        authBtn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
+                        authBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                        authBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                        authBtn.click();
                     }
-                }, Math.floor(Math.random() * 500) + 500);
+                    isClickPending = false;
+                }, Math.floor(Math.random() * 300) + 300);
                 return;
             } else {
-                console.log("[Auto-Clicker] Authorize button found but disabled. Sent wake-up events. Waiting for it to enable...");
-                // Forcefully remove attributes just in case
+                console.log("[Auto-Clicker] Authorize button is disabled, enabling...");
                 authBtn.removeAttribute('disabled');
                 authBtn.setAttribute('aria-disabled', 'false');
             }
