@@ -1,5 +1,7 @@
-const SERVER_URL = "http://localhost:5000";
+const SERVER_URL = "http://127.0.0.1:5000";
 let isServerOnline = false;
+
+console.log("%c[Twitch Farm Background] 🚀 Service worker initialized", "color: #9146FF; font-weight: bold;");
 
 // Completely wipe ALL Twitch cookies across all subdomains (including httpOnly cookies like persistent, sudo, etc.)
 async function wipeAllHttpOnlyCookies() {
@@ -136,6 +138,9 @@ async function checkServerStatus() {
     try {
         const res = await fetch(`${SERVER_URL}/api/current`, { cache: "no-store" });
         if (!res.ok) {
+            if (isServerOnline) {
+                console.log("[Background] ⚠️ Server status returned HTTP " + res.status);
+            }
             isServerOnline = false;
             clearProxyConfig();
             return;
@@ -150,13 +155,19 @@ async function checkServerStatus() {
         
         if (data && (data.user_code || data.auth_token) && !isServerOnline) {
             isServerOnline = true;
-            console.log("[Background] 🚀 Python Server detected ONLINE & ACTIVE! Opening Twitch Activate page...");
+            console.log(`[Background] 🚀 Python Server ONLINE! Code: ${data.user_code}, Proxy: ${data.proxy ? (data.proxy.protocol || 'http') + '://' + data.proxy.host + ':' + data.proxy.port : 'direct'}`);
             openOrFocusTwitchActivate(data.user_code);
         } else if (data && (data.status === "finished" || data.status === "waiting")) {
+            if (isServerOnline) {
+                console.log("[Background] 🏁 Auth finished or waiting.");
+            }
             isServerOnline = false;
             clearProxyConfig();
         }
     } catch (e) {
+        if (isServerOnline) {
+            console.log("[Background] 🔌 Server disconnected:", e.message);
+        }
         isServerOnline = false;
         clearProxyConfig();
     }

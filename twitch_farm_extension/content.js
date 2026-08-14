@@ -1,4 +1,4 @@
-const SERVER_URL = "http://localhost:5000";
+const SERVER_URL = "http://127.0.0.1:5000";
 
 function apiFetch(endpoint) {
     return new Promise((resolve, reject) => {
