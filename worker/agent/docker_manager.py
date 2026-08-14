@@ -282,6 +282,7 @@ class DockerManager:
                 environment=env,
                 ports={'5000/tcp': 5000},
                 volumes={config_dir: {'bind': '/app/Configuration', 'mode': 'rw'}},
+                dns=['8.8.8.8', '1.1.1.1'],
                 detach=True
             )
             
