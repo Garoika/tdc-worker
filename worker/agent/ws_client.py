@@ -276,12 +276,7 @@ class WebSocketClient:
                 })
             finally:
                 self.current_auth_container = None
-                if bridge:
-                    try:
-                        await bridge.stop()
-                    except Exception:
-                        pass
-                # Always clean up the container
+                # Always clean up the container FIRST
                 if container:
                     try:
                         cname = getattr(container, 'name', container.id)
@@ -290,6 +285,12 @@ class WebSocketClient:
                         logger.info(f"Auth container {cname} successfully stopped and removed.")
                     except Exception as e:
                         logger.error(f"Error stopping auth container: {e}")
+
+                if bridge:
+                    try:
+                        await bridge.stop()
+                    except Exception:
+                        pass
 
         logger.info("✨ Auth queue processing complete! All containers cleaned up.")
         await self.send({

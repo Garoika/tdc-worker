@@ -16,6 +16,7 @@ class ProxyBridge:
         self.local_host = local_host
         self.local_port = local_port
         self.server: Optional[asyncio.Server] = None
+        self.active_writers = set()
 
     async def start(self):
         self.server = await asyncio.start_server(
@@ -28,12 +29,23 @@ class ProxyBridge:
 
     async def stop(self):
         if self.server:
-            self.server.close()
-            await self.server.wait_closed()
+            try:
+                self.server.close()
+            except Exception:
+                pass
             self.server = None
-            logger.info("🛑 Proxy Bridge stopped")
+
+        # Force close all active client and upstream streams so we never hang
+        for w in list(self.active_writers):
+            try:
+                w.close()
+            except Exception:
+                pass
+        self.active_writers.clear()
+        logger.info("🛑 Proxy Bridge stopped")
 
     async def handle_client(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter):
+        self.active_writers.add(client_writer)
         upstream_writer: Optional[asyncio.StreamWriter] = None
         try:
             initial_data = await client_reader.readuntil(b'\r\n')
@@ -104,15 +116,16 @@ class ProxyBridge:
         except Exception as e:
             logger.debug(f"Bridge connection error: {e}")
         finally:
+            self.active_writers.discard(client_writer)
+            if upstream_writer:
+                self.active_writers.discard(upstream_writer)
             try:
                 client_writer.close()
-                await client_writer.wait_closed()
             except Exception:
                 pass
             if upstream_writer:
                 try:
                     upstream_writer.close()
-                    await upstream_writer.wait_closed()
                 except Exception:
                     pass
 
