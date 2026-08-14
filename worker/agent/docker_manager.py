@@ -268,6 +268,7 @@ class DockerManager:
             'DOCKER_USER_ID': login,
             'DOCKER_GAME': 'Roblox',
             'INSIDE_DOCKER': 'true',
+            'ONLY_AUTH': 'true',
             'PROXY_HOST': str(proxy_info.get('host', '')),
             'PROXY_PORT': str(proxy_info.get('port', '')),
             'PROXY_USER': str(proxy_info.get('username', '')),
