@@ -275,16 +275,24 @@ class DockerManager:
             'PROXY_PROTOCOL': str(proxy_info.get('protocol', 'http'))
         }
         
+        import platform
+        is_linux = platform.system() == 'Linux'
+
         logger.info(f"Launching auth container {name} on port 5000")
         def _run():
-            return self.client.containers.run(
-                image=DOCKER_IMAGE,
-                name=name,
-                environment=env,
-                network_mode='host',
-                volumes={config_dir: {'bind': '/app/Configuration', 'mode': 'rw'}},
-                detach=True
-            )
+            kwargs = {
+                'image': DOCKER_IMAGE,
+                'name': name,
+                'environment': env,
+                'volumes': {config_dir: {'bind': '/app/Configuration', 'mode': 'rw'}},
+                'detach': True
+            }
+            if is_linux:
+                kwargs['network_mode'] = 'host'
+            else:
+                kwargs['ports'] = {'5000/tcp': 5000}
+
+            return self.client.containers.run(**kwargs)
             
         return await loop.run_in_executor(None, _run)
 
