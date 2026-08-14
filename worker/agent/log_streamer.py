@@ -14,11 +14,12 @@ class LogStreamer:
         self.prog_re1 = re.compile(r'(\d+)\s*(?:/|of)\s*(\d+)', re.IGNORECASE)
         self.prog_pct_re = re.compile(r'(\d+(?:\.\d+)?)\s*%', re.IGNORECASE)
         
-        # Patterns for drop name
+        # Specific C# bot drop patterns
+        self.time_drop_re = re.compile(r'Time based drops\s*:\s*([^"\n\r]+)', re.IGNORECASE)
+        self.campaign_drop_re = re.compile(r'Current drop campaign\s*:\s*([^,\(\n\r]+)', re.IGNORECASE)
         self.drop_re1 = re.compile(r'\[([^\]]+)\]\s*\d+\s*/\s*\d+', re.IGNORECASE)
-        self.drop_re2 = re.compile(r'(?:Time based drops|Active drop|Mining drop|Current drop|Drop)\s*[:\-]\s*"?([^"\n\r]+)"?', re.IGNORECASE)
         self.drop_re3 = re.compile(r'Drop\s+"([^"]+)"', re.IGNORECASE)
-        self.drop_re4 = re.compile(r'([A-Za-z0-9\s\-]+(?:Points|Drop|Reward|Skin|Chest|Pack|Key|Item|Crate|Spray|Emote))', re.IGNORECASE)
+        self.drop_generic_re = re.compile(r'(?:Active drop|Mining drop|Claimed drop)\s*[:\-]\s*"?([^"\n\r]+)"?', re.IGNORECASE)
         
         # Patterns for streamer
         self.st_re1 = re.compile(r'SendSpadeEvents accepted for "([^"]+)"', re.IGNORECASE)
@@ -64,11 +65,22 @@ class LogStreamer:
                 except Exception:
                     pass
 
-            # 2. Drop name parsing
-            d_match = self.drop_re1.search(line_str) or self.drop_re2.search(line_str) or self.drop_re3.search(line_str) or self.drop_re4.search(line_str)
+            # 2. Drop name parsing (priority: specific item name > campaign name)
+            d_match = (
+                self.time_drop_re.search(line_str) or 
+                self.drop_re3.search(line_str) or 
+                self.drop_generic_re.search(line_str) or 
+                self.campaign_drop_re.search(line_str) or 
+                self.drop_re1.search(line_str)
+            )
             if d_match:
                 d_name = d_match.group(1).strip(' "\'[]:-,')
-                if d_name and len(d_name) >= 2 and not d_name.isdigit() and d_name.lower() not in ['info', 'warning', 'error', 'debug', 'minutes', 'min']:
+                if (
+                    d_name and 
+                    len(d_name) >= 2 and 
+                    not d_name.isdigit() and 
+                    d_name.lower() not in ['info', 'warning', 'error', 'debug', 'minutes', 'min', 'current drop', 'starting...', 'watching 100 seconds to e...']
+                ):
                     telemetry['drop_name'] = d_name
                     telemetry['current_drop'] = d_name
 

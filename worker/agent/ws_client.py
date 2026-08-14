@@ -373,15 +373,22 @@ class WebSocketClient:
                         continue
                         
                     telemetry = await self.log_streamer.process_container_logs(cid, LOG_TAIL_LINES)
-                    if telemetry:
-                        login = c.get('login') or telemetry.get('account_login', '')
+                    labels = c.get('labels', {}) or {}
+                    login = labels.get('tdc.login') or c.get('login') or (telemetry.get('account_login') if telemetry else '')
+                    job_id = labels.get('tdc.job_id') or ''
+                    account_id = labels.get('tdc.account_id') or ''
+
+                    if telemetry or login:
                         await self.send({
                             "type": "TELEMETRY_UPDATE",
                             "container_id": cid,
                             "container_name": c.get('name', ''),
+                            "job_id": job_id,
+                            "account_id": account_id,
                             "account_login": login,
-                            "game": c.get('game', ''),
-                            "telemetry": telemetry
+                            "login": login,
+                            "game": labels.get('tdc.game') or c.get('game', ''),
+                            "telemetry": telemetry or {}
                         })
                     await asyncio.sleep(0.1)
             except Exception as e:
