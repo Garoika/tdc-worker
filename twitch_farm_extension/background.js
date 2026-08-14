@@ -55,46 +55,6 @@ async function injectCleanAuthToken(authToken) {
 
 let currentProxy = null;
 
-// Block video streams & trackers during auth to make page loading 10x faster
-chrome.webRequest.onBeforeRequest.addListener(
-    (details) => {
-        const url = details.url.toLowerCase();
-        if (
-            url.includes(".m3u8") ||
-            url.includes(".ts") ||
-            url.includes("usher.ttvnw.net") ||
-            url.includes("video-weaver") ||
-            url.includes("video-edge") ||
-            url.includes("amazon-adsystem.com") ||
-            url.includes("richaudience.com") ||
-            url.includes("mxptint.net") ||
-            url.includes("scorecardresearch.com") ||
-            url.includes("doubleclick.net") ||
-            url.includes("google-analytics.com")
-        ) {
-            return { cancel: true };
-        }
-    },
-    { urls: ["<all_urls>"] },
-    ["blocking"]
-);
-
-// Handle Proxy Auth challenges (user/pass authentication)
-chrome.webRequest.onAuthRequired.addListener(
-    (details) => {
-        if (details.isProxy && currentProxy && currentProxy.username) {
-            return {
-                authCredentials: {
-                    username: currentProxy.username,
-                    password: currentProxy.password || ""
-                }
-            };
-        }
-    },
-    { urls: ["<all_urls>"] },
-    ["blocking"]
-);
-
 function applyProxyConfig(proxyObj) {
     if (!proxyObj || !proxyObj.host || !proxyObj.port) {
         clearProxyConfig();
