@@ -137,6 +137,15 @@ class ProxyBridge:
             except Exception:
                 return None, None
 
+        # Block heavy video streams & ad tracker domains to speed up auth 10x
+        t_low = target_host.lower()
+        if any(b in t_low for b in (
+            'usher.ttvnw.net', 'video-weaver', 'video-edge', 'amazon-adsystem',
+            'richaudience', 'mxptint.net', 'scorecardresearch', 'doubleclick.net',
+            'google-analytics', 'branch.io', 'quantserve'
+        )):
+            return None, None
+
         u_host = str(self.upstream.get('host', '')).strip()
         u_port = int(self.upstream.get('port', 0))
         u_user = str(self.upstream.get('username', '')).strip()

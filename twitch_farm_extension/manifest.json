@@ -9,9 +9,7 @@
     "activeTab",
     "tabs",
     "alarms",
-    "proxy",
-    "webRequest",
-    "webRequestAuthProvider"
+    "proxy"
   ],
   "host_permissions": [
     "<all_urls>"
