@@ -116,23 +116,27 @@ class ProxyBridge:
                 except Exception:
                     pass
 
-    async def connect_upstream(self, target_host: str, target_port: int):
+    async def connect_upstream(self, target_host: str, target_port: int, retries: int = 2):
         u_host = str(self.upstream.get('host', '')).strip()
         u_port = int(self.upstream.get('port', 0))
         u_user = str(self.upstream.get('username', '')).strip()
         u_pass = str(self.upstream.get('password', '')).strip()
         u_proto = str(self.upstream.get('protocol', 'http')).lower()
 
-        try:
-            if 'socks5' in u_proto:
-                return await self._connect_socks5(u_host, u_port, u_user, u_pass, target_host, target_port)
-            elif 'socks4' in u_proto:
-                return await self._connect_socks4(u_host, u_port, u_user, target_host, target_port)
-            else:
-                return await self._connect_http(u_host, u_port, u_user, u_pass, target_host, target_port)
-        except Exception as e:
-            logger.error(f"Failed to connect to upstream proxy ({u_proto}://{u_host}:{u_port}): {e}")
-            return None, None
+        for attempt in range(retries + 1):
+            try:
+                if 'socks5' in u_proto:
+                    return await self._connect_socks5(u_host, u_port, u_user, u_pass, target_host, target_port)
+                elif 'socks4' in u_proto:
+                    return await self._connect_socks4(u_host, u_port, u_user, target_host, target_port)
+                else:
+                    return await self._connect_http(u_host, u_port, u_user, u_pass, target_host, target_port)
+            except Exception as e:
+                if attempt < retries:
+                    await asyncio.sleep(0.1)
+                else:
+                    logger.debug(f"Failed to connect to upstream ({target_host}:{target_port}): {e}")
+                    return None, None
 
     async def _connect_socks5(self, u_host, u_port, u_user, u_pass, target_host, target_port):
         reader, writer = await asyncio.wait_for(asyncio.open_connection(u_host, u_port), timeout=10)
