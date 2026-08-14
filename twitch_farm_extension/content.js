@@ -1,28 +1,24 @@
-// --- Anti-AFK / Visibility Bypass Injection ---
-(function() {
-    const code = `
-        Object.defineProperty(document, 'hidden', { get: () => false });
-        Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
-        document.addEventListener('visibilitychange', e => e.stopImmediatePropagation(), true);
-        document.addEventListener('webkitvisibilitychange', e => e.stopImmediatePropagation(), true);
-        window.addEventListener('blur', e => e.stopImmediatePropagation(), true);
-    `;
-    const script = document.createElement('script');
-    script.textContent = code;
-    (document.head || document.documentElement).appendChild(script);
-    script.remove();
-})();
-// ----------------------------------------------
-
 const SERVER_URL = "http://localhost:5000";
 
 function apiFetch(endpoint) {
     return new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ action: "FETCH_API", endpoint }, (response) => {
-            if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
-            if (response && response.success) resolve(response.data);
-            else reject(new Error(response ? response.error : "Unknown error"));
-        });
+        if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
+            return reject(new Error("Extension context invalidated"));
+        }
+        try {
+            chrome.runtime.sendMessage({ action: "FETCH_API", endpoint }, (response) => {
+                if (chrome.runtime.lastError) {
+                    return reject(chrome.runtime.lastError);
+                }
+                if (response && response.success) {
+                    resolve(response.data);
+                } else {
+                    reject(new Error(response ? response.error : "Server offline"));
+                }
+            });
+        } catch (e) {
+            reject(e);
+        }
     });
 }
 
@@ -312,7 +308,14 @@ function startPolling() {
                 return;
             }
 
-            const data = await apiFetch('/api/poll');
+            let data;
+            try {
+                data = await apiFetch('/api/current');
+            } catch (e) {
+                // Server offline / restarting
+                return;
+            }
+            if (!data) return;
             
             // 1. Check if we are fully logged in
             const domLoginElem = document.querySelector('[data-a-target="user-display-name"]');
