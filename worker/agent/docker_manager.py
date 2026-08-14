@@ -79,7 +79,6 @@ class DockerManager:
             'AUTH_TOKEN': auth_token,
             'CLIENT_SECRET': client_secret,
             'TWITCH_USER_ID': twitch_user_id,
-            'PROXY_URL': account.get('proxy_url', ''),
             'INSIDE_DOCKER': 'true'
         }
         
