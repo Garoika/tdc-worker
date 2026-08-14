@@ -92,11 +92,18 @@ class WebSocketClient:
 
                 elif msg_type == 'START_AUTH_QUEUE':
                     accounts = msg.get('accounts', [])
+                    self.auth_cancelled = False
                     asyncio.create_task(self.process_auth_queue(accounts))
 
                 elif msg_type == 'CANCEL_AUTH_QUEUE':
                     self.auth_cancelled = True
                     logger.info("Auth queue cancelled by server")
+                    if hasattr(self, 'current_auth_container') and self.current_auth_container:
+                        try:
+                            cid = self.current_auth_container.id
+                            asyncio.create_task(self.docker.stop_container(cid))
+                        except Exception:
+                            pass
 
                 elif msg_type == 'GET_CONTAINER_LOGS':
                     asyncio.create_task(self.handle_get_container_logs(msg))
@@ -209,6 +216,7 @@ class WebSocketClient:
                         logger.error(f"Failed to start local ProxyBridge: {e}")
 
                 container = await self.docker.run_auth_container(acc_to_run, temp_dir)
+                self.current_auth_container = container
                 logger.info(f"Auth container launched for {login}, waiting for Chrome extension...")
                 
                 # Poll config file for ClientSecret (up to 180 seconds)
@@ -267,6 +275,7 @@ class WebSocketClient:
                     "error": str(e)
                 })
             finally:
+                self.current_auth_container = None
                 if bridge:
                     try:
                         await bridge.stop()
