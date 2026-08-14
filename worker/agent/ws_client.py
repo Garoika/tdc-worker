@@ -195,27 +195,8 @@ class WebSocketClient:
             config_file = os.path.join(temp_dir, f"config-{login}.json")
             
             container = None
-            bridge = None
             try:
-                acc_to_run = acc
-                proxy_info = acc.get('proxy')
-                if proxy_info and proxy_info.get('host') and proxy_info.get('port'):
-                    try:
-                        from agent.proxy_bridge import ProxyBridge
-                        bridge = ProxyBridge(upstream=proxy_info, local_host="0.0.0.0", local_port=5001)
-                        await bridge.start()
-                        acc_to_run = dict(acc)
-                        acc_to_run['proxy'] = {
-                            'host': '127.0.0.1',
-                            'port': 5001,
-                            'username': '',
-                            'password': '',
-                            'protocol': 'http'
-                        }
-                    except Exception as e:
-                        logger.error(f"Failed to start local ProxyBridge: {e}")
-
-                container = await self.docker.run_auth_container(acc_to_run, temp_dir)
+                container = await self.docker.run_auth_container(acc, temp_dir)
                 self.current_auth_container = container
                 logger.info(f"Auth container launched for {login}, waiting for Chrome extension...")
                 
@@ -276,13 +257,6 @@ class WebSocketClient:
                 })
             finally:
                 self.current_auth_container = None
-                # 1) Stop bridge FIRST to cut Chrome connections
-                if bridge:
-                    try:
-                        await bridge.stop()
-                    except Exception:
-                        pass
-                # 2) Then remove the container
                 if container:
                     try:
                         cname = getattr(container, 'name', container.id)

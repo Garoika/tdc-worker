@@ -8,8 +8,7 @@
     "storage",
     "activeTab",
     "tabs",
-    "alarms",
-    "proxy"
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>"

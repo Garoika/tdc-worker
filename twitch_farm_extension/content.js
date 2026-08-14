@@ -217,9 +217,6 @@ async function handleAccountFlow() {
         }
 
         console.log(`%c[Twitch Farm Helper] 🟢 Auth Server Connected! Account: ${data.login || data.index}, UserCode: ${data.user_code}`, "color: #2cf6b3; font-weight: bold; font-size: 13px;");
-        if (data.proxy) {
-            console.log(`[Twitch Farm Helper] 🌐 Proxy configured via bridge (${data.proxy.protocol || 'http'}://${data.proxy.host}:${data.proxy.port})`);
-        }
 
         // Only redirect when server is running and processing an account
         if (window.location.pathname.includes("/settings/connections") || window.location.pathname.includes("/settings")) {

@@ -55,84 +55,7 @@ async function injectCleanAuthToken(authToken) {
     }
 }
 
-let currentProxy = null;
 
-function applyProxyConfig(proxyObj) {
-    if (!proxyObj || !proxyObj.host || !proxyObj.port) {
-        clearProxyConfig();
-        return;
-    }
-
-    const hostStr = String(proxyObj.host).trim();
-    const portInt = parseInt(proxyObj.port);
-
-    if (currentProxy && currentProxy.host === hostStr && currentProxy.port === portInt) {
-        return; // Already active
-    }
-
-    currentProxy = {
-        host: hostStr,
-        port: portInt,
-        username: proxyObj.username || "",
-        password: proxyObj.password || ""
-    };
-
-    let scheme = "http";
-    if (proxyObj.protocol) {
-        const proto = String(proxyObj.protocol).toLowerCase();
-        if (proto.includes("socks5")) scheme = "socks5";
-        else if (proto.includes("socks4")) scheme = "socks4";
-        else if (proto.includes("https")) scheme = "https";
-        else scheme = "http";
-    }
-
-    const config = {
-        mode: "fixed_servers",
-        rules: {
-            singleProxy: {
-                scheme: scheme,
-                host: hostStr,
-                port: portInt
-            },
-            bypassList: [
-                "<local>",
-                "localhost",
-                "127.0.0.1",
-                "::1",
-                "192.168.*",
-                "10.*",
-                "172.16.*",
-                "172.17.*",
-                "172.18.*",
-                "172.19.*",
-                "172.20.*",
-                "172.21.*",
-                "172.22.*",
-                "172.23.*",
-                "172.24.*",
-                "172.25.*",
-                "172.26.*",
-                "172.27.*",
-                "172.28.*",
-                "172.29.*",
-                "172.30.*",
-                "172.31.*"
-            ]
-        }
-    };
-
-    chrome.proxy.settings.set({ value: config, scope: "regular" }, () => {
-        console.log(`[Background] 🌐 ${scheme.toUpperCase()} Proxy ENABLED: ${hostStr}:${portInt}`);
-    });
-}
-
-function clearProxyConfig() {
-    if (currentProxy === null) return;
-    currentProxy = null;
-    chrome.proxy.settings.clear({ scope: "regular" }, () => {
-        console.log("[Background] 🛑 HTTP Proxy DISABLED (Direct connection restored)");
-    });
-}
 
 let lastUserCode = null;
 
@@ -145,21 +68,14 @@ async function checkServerStatus() {
             }
             isServerOnline = false;
             lastUserCode = null;
-            clearProxyConfig();
             return;
         }
         const data = await res.json();
-
-        if (data && data.proxy) {
-            applyProxyConfig(data.proxy);
-        } else {
-            clearProxyConfig();
-        }
         
         if (data && data.user_code && data.user_code !== lastUserCode) {
             lastUserCode = data.user_code;
             isServerOnline = true;
-            console.log(`[Background] 🚀 Account transition / new code detected: ${data.user_code}, Proxy: ${data.proxy ? (data.proxy.protocol || 'http') + '://' + data.proxy.host + ':' + data.proxy.port : 'direct'}`);
+            console.log(`[Background] 🚀 New auth code detected: ${data.user_code}`);
             openOrFocusTwitchActivate(data.user_code);
         } else if (data && (data.status === "finished" || data.status === "waiting")) {
             if (isServerOnline) {
@@ -167,7 +83,6 @@ async function checkServerStatus() {
             }
             isServerOnline = false;
             lastUserCode = null;
-            clearProxyConfig();
         }
     } catch (e) {
         if (isServerOnline) {
@@ -175,7 +90,6 @@ async function checkServerStatus() {
         }
         isServerOnline = false;
         lastUserCode = null;
-        clearProxyConfig();
     }
 }
 
