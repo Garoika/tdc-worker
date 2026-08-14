@@ -91,11 +91,20 @@ function applyProxyConfig(proxyObj) {
         password: proxyObj.password || ""
     };
 
+    let scheme = "http";
+    if (proxyObj.protocol) {
+        const proto = String(proxyObj.protocol).toLowerCase();
+        if (proto.includes("socks5")) scheme = "socks5";
+        else if (proto.includes("socks4")) scheme = "socks4";
+        else if (proto.includes("https")) scheme = "https";
+        else scheme = "http";
+    }
+
     const config = {
         mode: "fixed_servers",
         rules: {
             singleProxy: {
-                scheme: "http",
+                scheme: scheme,
                 host: hostStr,
                 port: portInt
             },
@@ -104,7 +113,7 @@ function applyProxyConfig(proxyObj) {
     };
 
     chrome.proxy.settings.set({ value: config, scope: "regular" }, () => {
-        console.log(`[Background] 🌐 HTTP Proxy ENABLED: ${hostStr}:${portInt}`);
+        console.log(`[Background] 🌐 ${scheme.toUpperCase()} Proxy ENABLED: ${hostStr}:${portInt}`);
     });
 }
 

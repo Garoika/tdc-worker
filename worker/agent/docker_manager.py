@@ -271,7 +271,8 @@ class DockerManager:
             'PROXY_HOST': str(proxy_info.get('host', '')),
             'PROXY_PORT': str(proxy_info.get('port', '')),
             'PROXY_USER': str(proxy_info.get('username', '')),
-            'PROXY_PASS': str(proxy_info.get('password', ''))
+            'PROXY_PASS': str(proxy_info.get('password', '')),
+            'PROXY_PROTOCOL': str(proxy_info.get('protocol', 'http'))
         }
         
         logger.info(f"Launching auth container {name} on port 5000")
