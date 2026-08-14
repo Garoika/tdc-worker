@@ -117,6 +117,13 @@ class ProxyBridge:
                     pass
 
     async def connect_upstream(self, target_host: str, target_port: int, retries: int = 2):
+        # Direct local connection for private/LAN addresses
+        if target_host in ('localhost', '127.0.0.1', '::1') or target_host.startswith(('192.168.', '10.', '172.16.', '172.17.', '172.18.', '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.')):
+            try:
+                return await asyncio.wait_for(asyncio.open_connection(target_host, target_port), timeout=5)
+            except Exception:
+                return None, None
+
         u_host = str(self.upstream.get('host', '')).strip()
         u_port = int(self.upstream.get('port', 0))
         u_user = str(self.upstream.get('username', '')).strip()
