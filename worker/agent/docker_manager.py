@@ -261,12 +261,17 @@ class DockerManager:
                 pass
         await loop.run_in_executor(None, _cleanup_old)
         
+        proxy_info = account.get('proxy') or {}
         env = {
             'AUTH_TOKEN': account.get('auth_token', ''),
             'AUTH_PASSWORD': account.get('password', ''),
             'DOCKER_USER_ID': login,
             'DOCKER_GAME': 'Roblox',
-            'INSIDE_DOCKER': 'true'
+            'INSIDE_DOCKER': 'true',
+            'PROXY_HOST': str(proxy_info.get('host', '')),
+            'PROXY_PORT': str(proxy_info.get('port', '')),
+            'PROXY_USER': str(proxy_info.get('username', '')),
+            'PROXY_PASS': str(proxy_info.get('password', ''))
         }
         
         logger.info(f"Launching auth container {name} on port 5000")

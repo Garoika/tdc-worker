@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Twitch Farm Helper Extension",
+  "version": "1.1",
+  "description": "Полный контроль кук (включая httpOnly persistent), авто-открытие страницы при старте сервера",
+  "permissions": [
+    "cookies",
+    "storage",
+    "activeTab",
+    "tabs",
+    "alarms",
+    "proxy",
+    "webRequest",
+    "webRequestAuthProvider"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.twitch.tv/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
