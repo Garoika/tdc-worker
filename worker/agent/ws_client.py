@@ -276,21 +276,27 @@ class WebSocketClient:
                 })
             finally:
                 self.current_auth_container = None
-                # Always clean up the container FIRST
-                if container:
-                    try:
-                        cname = getattr(container, 'name', container.id)
-                        logger.info(f"Stopping and cleaning up auth container {cname}...")
-                        await self.docker.stop_container(container.id)
-                        logger.info(f"Auth container {cname} successfully stopped and removed.")
-                    except Exception as e:
-                        logger.error(f"Error stopping auth container: {e}")
-
+                # 1) Stop bridge FIRST to cut Chrome connections
                 if bridge:
                     try:
                         await bridge.stop()
                     except Exception:
                         pass
+                # 2) Then remove the container
+                if container:
+                    try:
+                        cname = getattr(container, 'name', container.id)
+                        logger.info(f"Stopping auth container {cname}...")
+                        await asyncio.wait_for(self.docker.stop_container(container.id), timeout=15)
+                        logger.info(f"Auth container {cname} removed.")
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timed out stopping auth container, retrying...")
+                        try:
+                            await self.docker.stop_container(container.id)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.error(f"Error stopping auth container: {e}")
 
         logger.info("✨ Auth queue processing complete! All containers cleaned up.")
         await self.send({
