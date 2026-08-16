@@ -7,10 +7,12 @@ logger = logging.getLogger(__name__)
 class LogStreamer:
     def __init__(self, docker_manager: DockerManager):
         self.docker_manager = docker_manager
-        # User login pattern
+        # User login pattern: [TwitchUser - login]
         self.user_re = re.compile(r'\[TwitchUser\s*-\s*([a-zA-Z0-9_]+)\]', re.IGNORECASE)
         
-        # Patterns for progress: 88/120, 88 / 120 min, 88 of 120, (73%), Progress: 88/120
+        # Primary Progress patterns (e.g. "3/240 minutes watched", "45/120 min")
+        self.prog_watched_re = re.compile(r'(\d+)\s*(?:/|of)\s*(\d+)\s*(?:minutes?|min)', re.IGNORECASE)
+        self.prog_bracket_re = re.compile(r'\[(?:Drop Progress|Progress|Mining)\]\s*(\d+)\s*(?:/|of)\s*(\d+)', re.IGNORECASE)
         self.prog_re1 = re.compile(r'(\d+)\s*(?:/|of)\s*(\d+)', re.IGNORECASE)
         self.prog_pct_re = re.compile(r'(\d+(?:\.\d+)?)\s*%', re.IGNORECASE)
         
@@ -41,12 +43,15 @@ class LogStreamer:
             if u_match:
                 telemetry['account_login'] = u_match.group(1).strip()
 
-            # 1. Progress parsing
-            prog_match = self.prog_re1.search(line_str)
-            if prog_match:
+            # 1. Progress parsing (prioritize lines explicitly mentioning minutes)
+            p_match = self.prog_watched_re.search(line_str) or self.prog_bracket_re.search(line_str)
+            if not p_match and not any(w in line_str.lower() for w in ['seconds', 'campaigns', 'games', 'http', 'socket', 'batch']):
+                p_match = self.prog_re1.search(line_str)
+
+            if p_match:
                 try:
-                    c_min = int(prog_match.group(1))
-                    t_min = int(prog_match.group(2))
+                    c_min = int(p_match.group(1))
+                    t_min = int(p_match.group(2))
                     if 0 <= c_min <= 10000 and 0 < t_min <= 10000:
                         telemetry['watched_minutes'] = c_min
                         telemetry['target_minutes'] = t_min
