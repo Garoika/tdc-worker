@@ -115,6 +115,24 @@ class DockerManager:
         loop = asyncio.get_running_loop()
         
         def _run():
+            # Anti-duplicate protection: check if container with this name or for this login already exists
+            try:
+                existing = self.client.containers.list(all=True)
+                for c in existing:
+                    c_login = c.labels.get('tdc.login') if c.labels else ''
+                    if c.name == name or (login and c_login == login):
+                        if c.status == 'running':
+                            logger.info(f"Container for {login} ({c.name}) is ALREADY running. Reusing existing container.")
+                            return c
+                        else:
+                            logger.info(f"Removing old/stopped container {c.name} for {login}")
+                            try:
+                                c.remove(force=True)
+                            except Exception:
+                                pass
+            except Exception as e:
+                logger.error(f"Error checking existing containers before spawn: {e}")
+
             return self.client.containers.run(
                 image=DOCKER_IMAGE,
                 name=name,
@@ -332,21 +350,34 @@ class DockerManager:
     async def cleanup_dead_containers(self):
         loop = asyncio.get_running_loop()
         def _clean():
-            try:
-                containers = self.client.containers.list(all=True, filters={"status": ["exited", "dead"]})
-                for c in containers:
+                # 1. Clean dead/exited containers
+                dead_containers = self.client.containers.list(all=True, filters={"status": ["exited", "dead"]})
+                for c in dead_containers:
                     if c.name.startswith('tdc-farm-') or c.name.startswith('tdc-auth-'):
                         try:
                             c.remove(force=True)
                             logger.info(f"Cleaned up dead container {c.name}")
-                        except docker.errors.NotFound:
+                        except Exception:
                             pass
-                        except docker.errors.APIError as e:
-                            if e.status_code not in [404, 409] and "already in progress" not in str(e).lower():
-                                logger.warning(f"Failed to remove {c.name}: {e}")
-                        except Exception as e:
-                            if "already in progress" not in str(e).lower() and "no such container" not in str(e).lower():
-                                logger.warning(f"Failed to remove {c.name}: {e}")
+
+                # 2. De-duplicate running containers for the same login
+                running = self.client.containers.list(filters={"status": "running"})
+                seen_logins = {}
+                for c in running:
+                    if c.name.startswith('tdc-farm-'):
+                        login = c.labels.get('tdc.login') if c.labels else ''
+                        if not login:
+                            continue
+                        if login in seen_logins:
+                            # Duplicate found! Terminate the extra container
+                            logger.warning(f"DUPLICATE container detected for user '{login}': {c.name}. Terminating duplicate.")
+                            try:
+                                c.stop(timeout=5)
+                                c.remove(force=True)
+                            except Exception as e:
+                                logger.error(f"Error removing duplicate container {c.name}: {e}")
+                        else:
+                            seen_logins[login] = c
             except Exception as e:
-                logger.debug(f"Error listing dead containers: {e}")
+                logger.debug(f"Error during cleanup: {e}")
         await loop.run_in_executor(None, _clean)
