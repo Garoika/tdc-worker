@@ -145,18 +145,30 @@ class DockerManager:
                     logger.info(f"Container {tid} forcibly stopped and removed")
                     stopped_any = True
                 except docker.errors.NotFound:
-                    pass
+                    stopped_any = True
+                except docker.errors.APIError as e:
+                    if e.status_code in [404, 409] or "already in progress" in str(e).lower():
+                        logger.debug(f"Container {tid} removal already in progress or completed")
+                        stopped_any = True
+                    else:
+                        logger.error(f"Error stopping container {tid}: {e}")
                 except Exception as e:
-                    logger.error(f"Error stopping container {tid}: {e}")
+                    if "already in progress" in str(e).lower() or "no such container" in str(e).lower():
+                        stopped_any = True
+                    else:
+                        logger.error(f"Error stopping container {tid}: {e}")
                     
             if not stopped_any and job_id:
                 # Secondary search across all running containers
                 try:
                     for c in self.client.containers.list(all=True):
                         if job_id[:8] in c.name or (container_id and container_id[:8] in c.id):
-                            c.remove(force=True)
-                            logger.info(f"Container {c.name} forcibly stopped via filter search")
-                            stopped_any = True
+                            try:
+                                c.remove(force=True)
+                                logger.info(f"Container {c.name} forcibly stopped via filter search")
+                                stopped_any = True
+                            except (docker.errors.NotFound, docker.errors.APIError):
+                                pass
                 except Exception as e:
                     logger.error(f"Error searching containers for stop: {e}")
                     
@@ -293,12 +305,21 @@ class DockerManager:
     async def cleanup_dead_containers(self):
         loop = asyncio.get_running_loop()
         def _clean():
-            containers = self.client.containers.list(all=True, filters={"status": ["exited", "dead"]})
-            for c in containers:
-                if c.name.startswith('tdc-farm-') or c.name.startswith('tdc-auth-'):
-                    logger.info(f"Removing dead container {c.name}")
-                    try:
-                        c.remove(force=True)
-                    except Exception as e:
-                        logger.error(f"Failed to remove {c.name}: {e}")
+            try:
+                containers = self.client.containers.list(all=True, filters={"status": ["exited", "dead"]})
+                for c in containers:
+                    if c.name.startswith('tdc-farm-') or c.name.startswith('tdc-auth-'):
+                        try:
+                            c.remove(force=True)
+                            logger.info(f"Cleaned up dead container {c.name}")
+                        except docker.errors.NotFound:
+                            pass
+                        except docker.errors.APIError as e:
+                            if e.status_code not in [404, 409] and "already in progress" not in str(e).lower():
+                                logger.warning(f"Failed to remove {c.name}: {e}")
+                        except Exception as e:
+                            if "already in progress" not in str(e).lower() and "no such container" not in str(e).lower():
+                                logger.warning(f"Failed to remove {c.name}: {e}")
+            except Exception as e:
+                logger.debug(f"Error listing dead containers: {e}")
         await loop.run_in_executor(None, _clean)
