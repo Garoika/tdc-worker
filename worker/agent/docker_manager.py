@@ -350,6 +350,7 @@ class DockerManager:
     async def cleanup_dead_containers(self):
         loop = asyncio.get_running_loop()
         def _clean():
+            try:
                 # 1. Clean dead/exited containers
                 dead_containers = self.client.containers.list(all=True, filters={"status": ["exited", "dead"]})
                 for c in dead_containers:
