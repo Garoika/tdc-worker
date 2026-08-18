@@ -115,7 +115,8 @@ class WebSocketClient:
         req_id = msg.get('request_id')
         cid = msg.get('container_id')
         job_id = msg.get('job_id')
-        logs = await self.docker.get_container_logs(container_id=cid, job_id=job_id, tail=0)
+        login = msg.get('login')
+        logs = await self.docker.get_container_logs(container_id=cid, job_id=job_id, login=login, tail=0)
         await self.send({
             "type": "CONTAINER_LOGS_RESPONSE",
             "request_id": req_id,

@@ -202,7 +202,7 @@ class DockerManager:
                 return 'unknown'
         return await loop.run_in_executor(None, _status)
 
-    async def get_container_logs(self, container_id: str = None, job_id: str = None, tail: int = 0) -> str:
+    async def get_container_logs(self, container_id: str = None, job_id: str = None, login: str = None, tail: int = 0) -> str:
         loop = asyncio.get_running_loop()
         def _logs():
             targets = []
@@ -221,6 +221,20 @@ class DockerManager:
                     pass
                 except Exception as e:
                     return f"Error reading logs for {tid}: {e}"
+
+            # Fallback: search running or existing containers by tdc.login label or name
+            if login:
+                try:
+                    all_containers = self.client.containers.list(all=True)
+                    for c in all_containers:
+                        c_login = c.labels.get('tdc.login') if c.labels else ''
+                        if c_login == login or login in c.name:
+                            tail_arg = "all" if tail <= 0 else tail
+                            logs = c.logs(tail=tail_arg, stdout=True, stderr=True)
+                            return logs.decode('utf-8', errors='replace')
+                except Exception as e:
+                    logger.error(f"Error searching container logs by login '{login}': {e}")
+
             return "Container not found or has exited."
         return await loop.run_in_executor(None, _logs)
 
