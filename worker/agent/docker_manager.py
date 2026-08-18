@@ -70,6 +70,11 @@ class DockerManager:
             "MinimizeInTray": False
         }
         
+        proxy_url = account.get('proxy_url') or target.get('proxy_url', '')
+        if proxy_url:
+            config_data["TwitchSettings"]["Proxy"] = proxy_url
+            logger.info(f"Using proxy for {login}: {proxy_url.split('@')[-1] if '@' in proxy_url else proxy_url}")
+
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, indent=2)
             
@@ -81,6 +86,14 @@ class DockerManager:
             'TWITCH_USER_ID': twitch_user_id,
             'INSIDE_DOCKER': 'true'
         }
+        
+        if proxy_url:
+            env['HTTP_PROXY'] = proxy_url
+            env['HTTPS_PROXY'] = proxy_url
+            env['ALL_PROXY'] = proxy_url
+            env['http_proxy'] = proxy_url
+            env['https_proxy'] = proxy_url
+            env['all_proxy'] = proxy_url
         
         # CPU limits
         cpu_limit = limits.get('cpu_limit', 1.0)
