@@ -262,4 +262,9 @@ export DOCKER_IMAGE="fools228/tdc-farmer:latest"
 export PYTHONUNBUFFERED=1
 
 cd "$SCRIPT_DIR/worker"
-exec "$RUN_PYTHON" -m agent.main
+while true; do
+    "$RUN_PYTHON" -m agent.main || true
+    echo ""
+    echo "[AutoUpdate] Restarting Worker Agent process..."
+    sleep 2
+done

@@ -16,11 +16,19 @@ async def main():
     logger.info(f"Master URL: {MASTER_URL}")
     logger.info(f"Docker Image: {DOCKER_IMAGE}")
     
+    autoupdater = AutoUpdater(check_interval=30)
+    # Check GitHub for latest version before starting
+    try:
+        updated = await autoupdater.check_and_update()
+        if updated:
+            return
+    except Exception as e:
+        logger.debug(f"Startup update check: {e}")
+
     metrics = SystemMetrics()
     docker_manager = DockerManager()
     docker_manager.ensure_farmer_image()
     ws_client = WebSocketClient(MASTER_URL, WORKER_TOKEN, docker_manager, metrics)
-    autoupdater = AutoUpdater(check_interval=60)
     
     try:
         await asyncio.gather(
