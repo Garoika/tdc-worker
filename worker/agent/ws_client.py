@@ -314,6 +314,7 @@ class WebSocketClient:
 
     async def heartbeat_loop(self):
         public_ip = self.auto_detect_ip()
+        sync_counter = 0
         
         while True:
             try:
@@ -326,6 +327,15 @@ class WebSocketClient:
                     "public_ip": public_ip
                 })
                 await self.docker.cleanup_dead_containers()
+
+                sync_counter += 1
+                if sync_counter >= 3:
+                    sync_counter = 0
+                    containers = await self.docker.list_running_containers()
+                    await self.send({
+                        "type": "SYNC_STATE",
+                        "containers": containers
+                    })
             except Exception as e:
                 logger.error(f"Heartbeat error: {e}")
             await asyncio.sleep(HEARTBEAT_INTERVAL)
