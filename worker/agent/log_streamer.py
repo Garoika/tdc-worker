@@ -107,6 +107,17 @@ class LogStreamer:
                 if streamer and len(streamer) >= 3 and streamer.lower() not in ['channel', 'true', 'false', 'streamer', 'twitch', 'offline', 'online', 'none', 'null', 'info', 'warning', 'found', 'broadcaster']:
                     telemetry['active_streamer'] = streamer
 
+        # 4. Strict Campaign Completion Detection:
+        # First "already completed, skipping." must occur, followed by "No campaign found."
+        has_completed_skip = False
+        for line in logs.splitlines():
+            line_lower = line.lower()
+            if 'already completed' in line_lower and 'skipping' in line_lower:
+                has_completed_skip = True
+            elif has_completed_skip and ('no campaign found' in line_lower or 'no broadcaster or campaign left' in line_lower):
+                telemetry['campaign_completed'] = True
+                break
+
         return telemetry
 
     async def process_container_logs(self, container_id: str, tail: int) -> dict:

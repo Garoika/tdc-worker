@@ -363,6 +363,19 @@ class WebSocketClient:
                     job_id = labels.get('tdc.job_id') or ''
                     account_id = labels.get('tdc.account_id') or ''
 
+                    if telemetry and telemetry.get('campaign_completed'):
+                        logger.info(f"✨ [Auto-Complete] Campaign fully completed for user '{login}' (cid: {cid[:12]}). Stopping container.")
+                        await self.send({
+                            "type": "CONTAINER_EVENT",
+                            "job_id": job_id,
+                            "account_id": account_id,
+                            "container_id": cid,
+                            "event": "completed",
+                            "status": "completed"
+                        })
+                        asyncio.create_task(self.docker.stop_container(cid, job_id=job_id))
+                        continue
+
                     if telemetry or login:
                         await self.send({
                             "type": "TELEMETRY_UPDATE",
