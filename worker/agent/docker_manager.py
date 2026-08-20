@@ -246,10 +246,18 @@ class DockerManager:
     async def list_running_containers(self) -> list:
         loop = asyncio.get_running_loop()
         def _list():
-            containers = self.client.containers.list(filters={"status": "running"})
+            try:
+                containers = self.client.containers.list(filters={"status": "running"})
+            except Exception as e:
+                logger.debug(f"Error querying container list: {e}")
+                return []
+
             res = []
             for c in containers:
-                if c.name.startswith('tdc-farm-') or c.name.startswith('tdc-auth-'):
+                try:
+                    name = c.name
+                    if not (name.startswith('tdc-farm-') or name.startswith('tdc-auth-')):
+                        continue
                     labels = c.labels or {}
                     env_list = c.attrs.get('Config', {}).get('Env', [])
                     env_dict = {}
@@ -270,12 +278,18 @@ class DockerManager:
                     game = labels.get('tdc.game') or env_dict.get('DOCKER_GAME', '')
                     res.append({
                         'container_id': c.id,
-                        'name': c.name,
+                        'name': name,
                         'status': c.status,
                         'login': login,
                         'game': game,
                         'labels': labels
                     })
+                except (docker.errors.NotFound, docker.errors.APIError):
+                    # Container was stopped/removed mid-loop (expected during auto-stop)
+                    continue
+                except Exception as e:
+                    logger.debug(f"Transient error inspecting container: {e}")
+                    continue
             return res
         return await loop.run_in_executor(None, _list)
 
@@ -284,9 +298,19 @@ class DockerManager:
         def _count():
             try:
                 containers = self.client.containers.list(filters={"status": "running"})
-                return len([c for c in containers if c.name.startswith('tdc-farm-') or c.name.startswith('tdc-auth-')])
+                count = 0
+                for c in containers:
+                    try:
+                        name = c.name
+                        if name.startswith('tdc-farm-') or name.startswith('tdc-auth-'):
+                            count += 1
+                    except (docker.errors.NotFound, docker.errors.APIError):
+                        continue
+                return count
+            except (docker.errors.NotFound, docker.errors.APIError):
+                return 0
             except Exception as e:
-                logger.error(f"Error counting running containers: {e}")
+                logger.debug(f"Transient error counting running containers: {e}")
                 return 0
         return await loop.run_in_executor(None, _count)
 
@@ -341,31 +365,39 @@ class DockerManager:
                 # 1. Clean dead/exited containers
                 dead_containers = self.client.containers.list(all=True, filters={"status": ["exited", "dead"]})
                 for c in dead_containers:
-                    if c.name.startswith('tdc-farm-') or c.name.startswith('tdc-auth-'):
-                        try:
+                    try:
+                        name = c.name
+                        if name.startswith('tdc-farm-') or name.startswith('tdc-auth-'):
                             c.remove(force=True)
-                            logger.info(f"Cleaned up dead container {c.name}")
-                        except Exception:
-                            pass
+                            logger.info(f"Cleaned up dead container {name}")
+                    except (docker.errors.NotFound, docker.errors.APIError):
+                        pass
+                    except Exception:
+                        pass
 
                 # 2. De-duplicate running containers for the same login
                 running = self.client.containers.list(filters={"status": "running"})
                 seen_logins = {}
                 for c in running:
-                    if c.name.startswith('tdc-farm-'):
+                    try:
+                        name = c.name
+                        if not name.startswith('tdc-farm-'):
+                            continue
                         login = c.labels.get('tdc.login') if c.labels else ''
                         if not login:
                             continue
                         if login in seen_logins:
-                            # Duplicate found! Terminate the extra container
-                            logger.warning(f"DUPLICATE container detected for user '{login}': {c.name}. Terminating duplicate.")
+                            logger.warning(f"DUPLICATE container detected for user '{login}': {name}. Terminating duplicate.")
                             try:
-                                c.stop(timeout=5)
                                 c.remove(force=True)
-                            except Exception as e:
-                                logger.error(f"Error removing duplicate container {c.name}: {e}")
+                            except Exception:
+                                pass
                         else:
                             seen_logins[login] = c
+                    except (docker.errors.NotFound, docker.errors.APIError):
+                        continue
+                    except Exception:
+                        continue
             except Exception as e:
                 logger.debug(f"Error during cleanup: {e}")
         await loop.run_in_executor(None, _clean)
