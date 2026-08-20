@@ -349,21 +349,26 @@ class WebSocketClient:
                     cid = c['container_id']
                     status = await self.docker.get_container_status(cid)
                     
+                    labels = c.get('labels', {}) or {}
+                    login = labels.get('tdc.login') or c.get('login') or ''
+                    job_id = labels.get('tdc.job_id') or ''
+                    account_id = labels.get('tdc.account_id') or ''
+
                     if status in ['exited', 'dead']:
                         self.session_farmed_active.discard(cid)
                         await self.send({
                             "type": "CONTAINER_EVENT",
+                            "job_id": job_id,
+                            "account_id": account_id,
                             "container_id": cid,
                             "event": "exited",
-                            "status": status
+                            "status": "stopped"
                         })
                         continue
                         
                     telemetry = await self.log_streamer.process_container_logs(cid, LOG_TAIL_LINES)
-                    labels = c.get('labels', {}) or {}
-                    login = labels.get('tdc.login') or c.get('login') or (telemetry.get('account_login') if telemetry else '')
-                    job_id = labels.get('tdc.job_id') or ''
-                    account_id = labels.get('tdc.account_id') or ''
+                    if not login and telemetry:
+                        login = telemetry.get('account_login') or ''
 
                     # Track active stream session farming
                     if telemetry:
@@ -375,24 +380,6 @@ class WebSocketClient:
                         if is_actively_farming and cid not in self.session_farmed_active:
                             self.session_farmed_active.add(cid)
                             logger.info(f"🟢 [Session Farm Active] Container {cid[:12]} for user '{login}' is actively farming stream '{telemetry.get('active_streamer', 'live')}'.")
-
-                    # Auto-Complete check: ONLY auto-stop if this container actually farmed in the current session
-                    if telemetry and telemetry.get('campaign_completed'):
-                        if cid in self.session_farmed_active:
-                            logger.info(f"✨ [Auto-Complete] Active farming session completed for user '{login}' (cid: {cid[:12]}). Stopping container.")
-                            self.session_farmed_active.discard(cid)
-                            await self.send({
-                                "type": "CONTAINER_EVENT",
-                                "job_id": job_id,
-                                "account_id": account_id,
-                                "container_id": cid,
-                                "event": "completed",
-                                "status": "completed"
-                            })
-                            asyncio.create_task(self.docker.stop_container(cid, job_id=job_id))
-                            continue
-                        else:
-                            logger.debug(f"⏳ [Waiting for Stream] User '{login}' (cid: {cid[:12]}) has not farmed yet in this session. Keeping container alive to wait for campaign/stream start.")
 
                     if telemetry or login:
                         await self.send({
