@@ -112,18 +112,6 @@ class LogStreamer:
             if 'sendspadeevents accepted' in line_str.lower() or 'watching broadcaster' in line_str.lower():
                 telemetry['is_actively_watching'] = True
 
-        # 4. Strict Campaign Completion Detection:
-        # ONLY if the account actually farmed minutes or completed the current campaign progress
-        has_completed_skip = False
-        for line in logs.splitlines():
-            line_lower = line.lower()
-            if 'already completed' in line_lower and 'skipping' in line_lower:
-                has_completed_skip = True
-            elif has_completed_skip and ('no campaign found' in line_lower or 'no broadcaster or campaign left' in line_lower):
-                if telemetry.get('watched_minutes', 0) > 0 or telemetry.get('percentage', 0) >= 99:
-                    telemetry['campaign_completed'] = True
-                    break
-
         return telemetry
 
     async def process_container_logs(self, container_id: str, tail: int) -> dict:

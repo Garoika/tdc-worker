@@ -22,7 +22,6 @@ class WebSocketClient:
         self.running = False
         self.tasks = []
         self.spawn_semaphore = asyncio.Semaphore(2)
-        self.session_farmed_active = set()
 
     async def connect(self):
         headers = {'Authorization': f'Bearer {self.worker_token}'} if self.worker_token else {}
@@ -355,7 +354,6 @@ class WebSocketClient:
                     account_id = labels.get('tdc.account_id') or ''
 
                     if status in ['exited', 'dead']:
-                        self.session_farmed_active.discard(cid)
                         await self.send({
                             "type": "CONTAINER_EVENT",
                             "job_id": job_id,
@@ -369,17 +367,6 @@ class WebSocketClient:
                     telemetry = await self.log_streamer.process_container_logs(cid, LOG_TAIL_LINES)
                     if not login and telemetry:
                         login = telemetry.get('account_login') or ''
-
-                    # Track active stream session farming
-                    if telemetry:
-                        is_actively_farming = (
-                            bool(telemetry.get('active_streamer')) or 
-                            telemetry.get('watched_minutes', 0) > 0 or 
-                            telemetry.get('is_actively_watching', False)
-                        )
-                        if is_actively_farming and cid not in self.session_farmed_active:
-                            self.session_farmed_active.add(cid)
-                            logger.info(f"🟢 [Session Farm Active] Container {cid[:12]} for user '{login}' is actively farming stream '{telemetry.get('active_streamer', 'live')}'.")
 
                     if telemetry or login:
                         await self.send({
