@@ -100,12 +100,17 @@ class LogStreamer:
             st_match = (
                 self.st_spade_re.search(line_str) or 
                 self.st_watching_pipe_re.search(line_str) or 
-                self.st_priority_re.search(line_str)
+                self.st_priority_re.search(line_str) or
+                self.st_watching_quotes_re.search(line_str)
             )
             if st_match:
                 streamer = st_match.group(1).strip(' "\'[]:-,')
                 if streamer and len(streamer) >= 3 and streamer.lower() not in ['channel', 'true', 'false', 'streamer', 'twitch', 'offline', 'online', 'none', 'null', 'info', 'warning', 'found', 'broadcaster']:
                     telemetry['active_streamer'] = streamer
+                    telemetry['is_actively_watching'] = True
+
+            if 'sendspadeevents accepted' in line_str.lower() or 'watching broadcaster' in line_str.lower():
+                telemetry['is_actively_watching'] = True
 
         # 4. Strict Campaign Completion Detection:
         # First "already completed, skipping." must occur, followed by "No campaign found."
