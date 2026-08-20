@@ -100,25 +100,18 @@ class DockerManager:
         
         logger.info(f"Spawning container {name} for user {login} watching {game}")
         loop = asyncio.get_running_loop()
-        
         def _run():
-            # Anti-duplicate protection: check if container with this name or for this login already exists
+            # If container with this exact name already exists, remove it so run won't fail with name conflict
             try:
-                existing = self.client.containers.list(all=True)
-                for c in existing:
-                    c_login = c.labels.get('tdc.login') if c.labels else ''
-                    if c.name == name or (login and c_login == login):
-                        if c.status == 'running':
-                            logger.info(f"Container for {login} ({c.name}) is ALREADY running. Reusing existing container.")
-                            return c
-                        else:
-                            logger.info(f"Removing old/stopped container {c.name} for {login}")
-                            try:
-                                c.remove(force=True)
-                            except Exception:
-                                pass
-            except Exception as e:
-                logger.error(f"Error checking existing containers before spawn: {e}")
+                c = self.client.containers.get(name)
+                try:
+                    c.remove(force=True)
+                except Exception:
+                    pass
+            except docker.errors.NotFound:
+                pass
+            except Exception:
+                pass
 
             return self.client.containers.run(
                 image=DOCKER_IMAGE,
