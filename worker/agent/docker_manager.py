@@ -64,8 +64,8 @@ class DockerManager:
             "LaunchOnStartup": False,
             "LogLevel": 0,
             "WebhookURL": "",
-            "WaitingSeconds": 300,
-            "AttemptToWatch": 5,
+            "WaitingSeconds": 120,
+            "AttemptToWatch": 999999,
             "WatchBrowserHeadless": True,
             "MinimizeInTray": False
         }
@@ -131,7 +131,7 @@ class DockerManager:
                 cpu_period=cpu_period,
                 cpu_quota=cpu_quota,
                 mem_limit=mem_limit,
-                restart_policy={"Name": "on-failure", "MaximumRetryCount": 3},
+                restart_policy={"Name": "unless-stopped"},
                 detach=True
             )
             

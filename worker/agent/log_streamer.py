@@ -113,15 +113,16 @@ class LogStreamer:
                 telemetry['is_actively_watching'] = True
 
         # 4. Strict Campaign Completion Detection:
-        # First "already completed, skipping." must occur, followed by "No campaign found."
+        # ONLY if the account actually farmed minutes or completed the current campaign progress
         has_completed_skip = False
         for line in logs.splitlines():
             line_lower = line.lower()
             if 'already completed' in line_lower and 'skipping' in line_lower:
                 has_completed_skip = True
             elif has_completed_skip and ('no campaign found' in line_lower or 'no broadcaster or campaign left' in line_lower):
-                telemetry['campaign_completed'] = True
-                break
+                if telemetry.get('watched_minutes', 0) > 0 or telemetry.get('percentage', 0) >= 99:
+                    telemetry['campaign_completed'] = True
+                    break
 
         return telemetry
 
