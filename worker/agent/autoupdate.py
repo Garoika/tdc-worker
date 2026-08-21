@@ -18,14 +18,8 @@ class AutoUpdater:
         logger.info(f"🚀 [AutoUpdate] Restarting worker process in {self.worker_dir}...")
         
         if sys.platform == "win32":
-            # On Windows: spawn detached python process and exit cleanly
-            try:
-                subprocess.Popen(
-                    [sys.executable, "-m", "agent.main"],
-                    cwd=self.worker_dir
-                )
-            except Exception as e:
-                logger.error(f"[AutoUpdate] Failed to spawn new process on Windows: {e}")
+            # On Windows: start_worker.bat loop will automatically restart the process in the same console.
+            # Cleanly exit so no duplicate rogue processes are created.
             os._exit(0)
         else:
             # On Linux/POSIX: execv seamlessly replaces current process

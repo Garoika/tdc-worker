@@ -51,13 +51,6 @@ async def main():
     launch_monitor()
     
     autoupdater = AutoUpdater(check_interval=30)
-    # Check GitHub for latest version before starting
-    try:
-        updated = await autoupdater.check_and_update()
-        if updated:
-            return
-    except Exception as e:
-        logger.debug(f"Startup update check: {e}")
 
     metrics = SystemMetrics()
     if RUNNER_TYPE == 'docker':
