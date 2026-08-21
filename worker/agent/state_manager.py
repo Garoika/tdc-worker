@@ -9,6 +9,24 @@ logger = logging.getLogger(__name__)
 
 STATE_FILE = Path(__file__).resolve().parent.parent / ".worker_state.json"
 
+def format_duration_en(minutes: int) -> str:
+    """Format minutes into concise English duration format: e.g. '1d 2h 15m', '1h 45m', '36m', 'Done'."""
+    if minutes <= 0:
+        return "Done"
+    days = minutes // 1440
+    rem = minutes % 1440
+    hours = rem // 60
+    mins = rem % 60
+    
+    parts = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0:
+        parts.append(f"{hours}h")
+    if mins > 0 or not parts:
+        parts.append(f"{mins}m")
+    return " ".join(parts)
+
 class StateManager:
     """
     Maintains real-time worker state in-memory and dumps it to a local JSON file
@@ -100,7 +118,7 @@ class StateManager:
                     'login': login,
                     'game': game
                 })
-                if len(self.recent_events) > 15:
+                if len(self.recent_events) > 30:
                     self.recent_events.pop()
 
         self.save_state()
@@ -112,7 +130,7 @@ class StateManager:
             return
         self._last_save = now
 
-        # Compute game groupings
+        # Compute game groupings & bottleneck (minimum progress)
         game_stats = {}
         for job_id, job in self.active_jobs.items():
             login = job.get('login', '')
@@ -121,34 +139,40 @@ class StateManager:
                 game_stats[game] = {
                     'count': 0,
                     'streamers': set(),
-                    'total_percent': 0,
-                    'accounts': []
+                    'min_watched': None,
+                    'required': 60
                 }
             game_stats[game]['count'] += 1
             
             t = self.account_telemetry.get(login, {})
-            pct = t.get('percent', 0)
+            watched = t.get('watched', 0)
+            req = t.get('required', 60)
+            if req > 0:
+                game_stats[game]['required'] = req
+            
+            if game_stats[game]['min_watched'] is None or watched < game_stats[game]['min_watched']:
+                game_stats[game]['min_watched'] = watched
+                
             st = t.get('streamer', '')
             if st:
                 game_stats[game]['streamers'].add(st)
-            game_stats[game]['total_percent'] += pct
-            game_stats[game]['accounts'].append({
-                'login': login,
-                'watched': t.get('watched', 0),
-                'required': t.get('required', 0),
-                'percent': pct,
-                'streamer': st
-            })
 
         # Format game stats for json
         formatted_games = {}
         for g_name, g_data in game_stats.items():
             cnt = g_data['count']
-            avg_p = round(g_data['total_percent'] / cnt) if cnt > 0 else 0
+            min_w = g_data['min_watched'] if g_data['min_watched'] is not None else 0
+            req_w = g_data['required']
+            left_mins = max(0, req_w - min_w)
+            time_left_str = format_duration_en(left_mins)
+            
             formatted_games[g_name] = {
                 'count': cnt,
                 'streamers': list(g_data['streamers'])[:5],
-                'avg_percent': avg_p
+                'min_watched': min_w,
+                'required_minutes': req_w,
+                'left_minutes': left_mins,
+                'time_left': time_left_str
             }
 
         state_data = {
@@ -166,7 +190,7 @@ class StateManager:
             'ram_total_mb': self.ram_total_mb,
             'total_accounts': len(self.active_jobs),
             'games': formatted_games,
-            'recent_events': [e['text'] for e in self.recent_events[:8]]
+            'recent_events': [e['text'] for e in self.recent_events[:25]]
         }
 
         try:

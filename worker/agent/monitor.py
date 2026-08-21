@@ -24,8 +24,6 @@ BLUE = "\033[34m"
 MAGENTA = "\033[35m"
 RED = "\033[31m"
 WHITE = "\033[37m"
-BG_BLUE = "\033[44m"
-BG_DARK = "\033[40m"
 
 def enable_windows_ansi():
     """Enable VT100 / ANSI escape sequences in Windows Console."""
@@ -40,19 +38,6 @@ def enable_windows_ansi():
         # Set console window title
         ctypes.windll.kernel32.SetConsoleTitleW("TDC Cluster — Live Worker Monitor")
 
-def render_progress_bar(percent: int, width: int = 12) -> str:
-    filled = int(round((percent / 100) * width))
-    filled = max(0, min(width, filled))
-    bar = "█" * filled + "░" * (width - filled)
-    if percent >= 90:
-        return f"{GREEN}[{bar}] {percent}%{RESET}"
-    elif percent >= 50:
-        return f"{CYAN}[{bar}] {percent}%{RESET}"
-    elif percent > 0:
-        return f"{YELLOW}[{bar}] {percent}%{RESET}"
-    else:
-        return f"{DIM}[{bar}] {percent}%{RESET}"
-
 def render_cpu_bar(percent: float, width: int = 10) -> str:
     filled = int(round((percent / 100) * width))
     filled = max(0, min(width, filled))
@@ -65,13 +50,23 @@ def render_cpu_bar(percent: float, width: int = 10) -> str:
         return f"{GREEN}[{bar}] {percent:.1f}%{RESET}"
 
 def format_uptime(seconds: int) -> str:
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    return f"{h:02d}:{m:02d}:{s:02d}"
+    days = seconds // 86400
+    rem = seconds % 86400
+    hours = rem // 3600
+    mins = (rem % 3600) // 60
+    secs = rem % 60
+    
+    parts = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0 or days > 0:
+        parts.append(f"{hours}h")
+    parts.append(f"{mins}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
 
 def clear_screen():
-    # Cursor to top-left & clear
+    # Move cursor to top-left & clear
     sys.stdout.write("\033[H\033[J")
     sys.stdout.flush()
 
@@ -138,46 +133,57 @@ def main():
             clear_screen()
             
             lines = [
-                f"{CYAN}╔══════════════════════════════════════════════════════════════════════════════╗{RESET}",
-                f"{CYAN}║{BOLD}{WHITE}                 ⚡ TDC WORKER NODE — LIVE MONITOR DASHBOARD ⚡                 {RESET}{CYAN}║{RESET}",
-                f"{CYAN}╚══════════════════════════════════════════════════════════════════════════════╝{RESET}",
+                f"{CYAN}╔════════════════════════════════════════════════════════════════════════════════╗{RESET}",
+                f"{CYAN}║{BOLD}{WHITE}                   ⚡ TDC WORKER — LIVE MONITOR DASHBOARD ⚡                    {RESET}{CYAN}║{RESET}",
+                f"{CYAN}╚════════════════════════════════════════════════════════════════════════════════╝{RESET}",
                 f" {BOLD}Node:{RESET} {WHITE}{node_name}{RESET} ({status_badge})   {BOLD}Mode:{RESET} {YELLOW}{runner_mode}{RESET}   {BOLD}PID:{RESET} {DIM}{farmer_pid}{RESET}   {BOLD}Uptime:{RESET} {WHITE}{uptime_str}{RESET}",
                 f" {BOLD}CPU:{RESET}  {render_cpu_bar(cpu_pct)}    {BOLD}RAM:{RESET} {WHITE}{ram_used:.0f} MB{RESET} / {DIM}{ram_tot/1024:.1f} GB{RESET}   {BOLD}Time:{RESET} {DIM}{time.strftime('%H:%M:%S')}{RESET}",
-                f"{CYAN}──────────────────────────────────────────────────────────────────────────────{RESET}",
+                f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}",
                 f" {BOLD}👥 ACTIVE FARMING ACCOUNTS:{RESET} {GREEN}{BOLD}{total_acc}{RESET} {DIM}accounts assigned to this node{RESET}",
-                f"{CYAN}──────────────────────────────────────────────────────────────────────────────{RESET}",
+                f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}",
                 f" {BOLD}🎮 GAMES BREAKDOWN:{RESET}"
             ]
 
             if games:
-                lines.append(f" ┌──────────────────────────┬────────────┬────────────────────────────┬──────────────┐")
-                lines.append(f" │ {BOLD}Game Name{RESET}                │ {BOLD}Accounts{RESET}   │ {BOLD}Active Streamers{RESET}           │ {BOLD}Avg Progress{RESET} │")
-                lines.append(f" ├──────────────────────────┼────────────┼────────────────────────────┼──────────────┤")
+                lines.append(f" ┌──────────────────────────┬────────────┬────────────────────────┬──────────────────┐")
+                lines.append(f" │ {BOLD}Game Name{RESET}                │ {BOLD}Accounts{RESET}   │ {BOLD}Live Streamers{RESET}         │ {BOLD}Time Left{RESET}        │")
+                lines.append(f" ├──────────────────────────┼────────────┼────────────────────────┼──────────────────┤")
                 for g_name, g_info in games.items():
                     cnt = g_info.get('count', 0)
                     st_list = ", ".join(g_info.get('streamers', [])) or "Seeking streamer..."
-                    if len(st_list) > 26:
-                        st_list = st_list[:23] + "..."
-                    avg_p = g_info.get('avg_percent', 0)
-                    p_bar = render_progress_bar(avg_p, width=6)
+                    if len(st_list) > 22:
+                        st_list = st_list[:19] + "..."
                     
+                    min_w = g_info.get('min_watched', 0)
+                    req_w = g_info.get('required_minutes', 60)
+                    time_left_str = g_info.get('time_left', 'Done')
+                    
+                    # Format Time Left cell: e.g. "1h 45m (15/120m)"
+                    if time_left_str == "Done":
+                        left_cell = f"{GREEN}Done ({req_w}/{req_w}m){RESET}"
+                    else:
+                        left_cell = f"{CYAN}{time_left_str}{RESET} {DIM}({min_w}/{req_w}m){RESET}"
+
                     # Pad game name nicely
                     display_g = g_name if len(g_name) <= 24 else g_name[:21] + "..."
-                    lines.append(f" │ {WHITE}{display_g:<24}{RESET} │ {YELLOW}{cnt:>4} acc{RESET}   │ {DIM}{st_list:<26}{RESET} │ {p_bar} │")
-                lines.append(f" └──────────────────────────┴────────────┴────────────────────────────┴──────────────┘")
+                    raw_left_len = len(f"{time_left_str} ({min_w}/{req_w}m)")
+                    padding = " " * max(0, 16 - raw_left_len)
+
+                    lines.append(f" │ {WHITE}{display_g:<24}{RESET} │ {YELLOW}{cnt:>4} acc{RESET}   │ {DIM}{st_list:<22}{RESET} │ {left_cell}{padding} │")
+                lines.append(f" └──────────────────────────┴────────────┴────────────────────────┴──────────────────┘")
             else:
                 lines.append(f"   {DIM}No accounts currently assigned. Waiting for master server tasks...{RESET}")
 
             lines.append("")
-            lines.append(f" {BOLD}📜 RECENT ACTIVITY LOG:{RESET}")
+            lines.append(f" {BOLD}📜 RECENT ACTIVITY LOG (Latest {min(len(recent_events), 20)} events):{RESET}")
             if recent_events:
-                for evt in recent_events[:6]:
+                for evt in recent_events[:20]:
                     lines.append(f"  {CYAN}•{RESET} {DIM}{evt}{RESET}")
             else:
                 lines.append(f"  {DIM}Waiting for telemetry stream from farmer process...{RESET}")
 
-            lines.append(f"{CYAN}──────────────────────────────────────────────────────────────────────────────{RESET}")
-            lines.append(f" {DIM}Auto-refreshes live • Linked to main worker PID {parent_pid or 'N/A'}{RESET}")
+            lines.append(f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}")
+            lines.append(f" {DIM}Auto-refreshes live (1s) • Closes automatically when main worker exits{RESET}")
 
             sys.stdout.write("\n".join(lines) + "\n")
             sys.stdout.flush()
