@@ -252,12 +252,19 @@ class ProcessManager:
         is_running = self.process is not None and self.process.poll() is None
         return len(self.active_jobs) if is_running else 0
 
+    async def get_container_status(self, container_id: str) -> str:
+        """Return running or stopped."""
+        if self.process is not None and self.process.poll() is None:
+            return 'running'
+        return 'stopped'
+
     async def cleanup_dead_containers(self):
         """Supervisor check: auto-recover if native process exited unexpectedly."""
         if self.process and self.process.poll() is not None:
             if self.active_jobs:
                 logger.warning("[ProcessManager] Process exited unexpectedly. Triggering self-healing restart...")
                 self._schedule_debounced_restart(delay=2.0)
+
 
 
     async def get_container_logs(
