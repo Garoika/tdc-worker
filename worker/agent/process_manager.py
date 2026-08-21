@@ -150,7 +150,7 @@ class ProcessManager:
             "LogLevel": 0,
             "WebhookURL": "",
             "WaitingSeconds": 120,
-            "AttemptToWatch": 999999,
+            "AttemptToWatch": 9999,
             "WatchBrowserHeadless": True,
             "MinimizeInTray": False
         }
