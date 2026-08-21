@@ -28,12 +28,22 @@ class ProcessManager:
         self._lock = asyncio.Lock()
 
     def ensure_farmer_image(self):
-        """Verify that TwitchDropsBot.Console.exe is present and executable."""
+        """Verify that TwitchDropsBot.Console.exe is present and executable, and kill orphan instances."""
         logger.info(f"Checking Native Farmer Binary at: {self.exe_path}...")
         if not self.exe_path.exists():
             raise FileNotFoundError(
                 f"Farmer binary not found at {self.exe_path}! Please ensure farmer_bin is deployed."
             )
+        # Kill any orphan TwitchDropsBot processes from previous runs
+        self._terminate_process()
+        try:
+            import os
+            if os.name == 'nt':
+                subprocess.run(["taskkill", "/f", "/im", "TwitchDropsBot.Console.exe"], capture_output=True)
+            else:
+                subprocess.run(["pkill", "-9", "-f", "TwitchDropsBot.Console"], capture_output=True)
+        except Exception:
+            pass
         logger.info(f"Native Farmer Binary verified: {self.exe_path} (Process Mode Active)")
 
     async def spawn_container(self, job_id: str, account: dict, target: dict, limits: dict) -> str:
