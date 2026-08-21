@@ -75,8 +75,6 @@ class LogStreamer:
                             telemetry['current_minutes'] = c_min
                             telemetry['required_minutes'] = t_min
                             telemetry['percentage'] = min(100, int(round((c_min / t_min) * 100)))
-                            state['explicit_progress'] = True
-                            state['spade_ticks'] = 0
                     except Exception:
                         pass
 
