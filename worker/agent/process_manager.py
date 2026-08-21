@@ -171,6 +171,10 @@ class ProcessManager:
     def _start_process(self):
         """Spawn TwitchDropsBot.Console.exe and start stdout reader thread."""
         try:
+            import os
+            env = os.environ.copy()
+            env['INSIDE_DOCKER'] = 'true'
+
             logger.info(f"[ProcessManager] Launching native TwitchDropsBot process: {self.exe_path}")
             self.process = subprocess.Popen(
                 [str(self.exe_path)],
@@ -180,7 +184,8 @@ class ProcessManager:
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                bufsize=1
+                bufsize=1,
+                env=env
             )
             logger.info(f"[ProcessManager] TwitchDropsBot started successfully (PID: {self.process.pid})")
 
