@@ -162,7 +162,7 @@ def main():
                 f" {BOLD}Node:{RESET} {WHITE}{node_name}{RESET} ({status_badge})    {BOLD}PID:{RESET} {DIM}{farmer_pid}{RESET}    {BOLD}Uptime:{RESET} {WHITE}{uptime_str}{RESET}    {BOLD}Time:{RESET} {DIM}{time.strftime('%H:%M:%S')}{RESET}",
                 f" {BOLD}CPU:{RESET}  {render_cpu_bar(cpu_pct)}    {BOLD}RAM:{RESET} {ram_str}",
                 f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}",
-                f" {BOLD}👥 ACTIVE ACCOUNTS:{RESET} {GREEN}{BOLD}{total_farming}{RESET} {GREEN}Farming 🟢{RESET}  |  {YELLOW}{BOLD}{total_waiting}{RESET} {YELLOW}Waiting for Stream ⏳{RESET}  {DIM}(Total: {total_acc}){RESET}",
+                f" {BOLD}👥 ACTIVE ACCOUNTS:{RESET} {GREEN}{BOLD}{total_farming}{RESET} {GREEN}Farming 🟢{RESET}  |  {YELLOW}{BOLD}{total_waiting}{RESET} {YELLOW}Seeking Streamer{RESET}  {DIM}(Total: {total_acc}){RESET}",
                 f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}",
                 f" {BOLD}🎮 GAMES BREAKDOWN:{RESET}"
             ]
@@ -176,20 +176,20 @@ def main():
                     is_active = g_info.get('is_active', False)
                     st_list = ", ".join(g_info.get('streamers', []))
                     if not st_list:
-                        st_list = "⏳ Waiting for stream..."
+                        st_list = "Seeking streamer..."
                     if len(st_list) > 22:
                         st_list = st_list[:19] + "..."
                     
                     min_w = g_info.get('min_watched', 0)
                     req_w = g_info.get('required_minutes', 60)
-                    time_left_str = g_info.get('time_left', 'Starts Soon')
+                    time_left_str = g_info.get('time_left', 'Searching...')
                     
                     if time_left_str == "Done":
                         left_cell = f"{GREEN}Done ({req_w}/{req_w}m){RESET}"
                         raw_left_len = len(f"Done ({req_w}/{req_w}m)")
-                    elif not is_active or time_left_str == "Starts Soon":
-                        left_cell = f"{YELLOW}Starts Soon{RESET} {DIM}({min_w}/{req_w}m){RESET}"
-                        raw_left_len = len(f"Starts Soon ({min_w}/{req_w}m)")
+                    elif not is_active or time_left_str in ["Starts Soon", "Searching..."]:
+                        left_cell = f"{YELLOW}Searching...{RESET}"
+                        raw_left_len = len("Searching...")
                     else:
                         left_cell = f"{CYAN}{time_left_str}{RESET} {DIM}({min_w}/{req_w}m){RESET}"
                         raw_left_len = len(f"{time_left_str} ({min_w}/{req_w}m)")

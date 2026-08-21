@@ -175,7 +175,7 @@ class StateManager:
             if is_active:
                 time_left_str = format_duration_en(left_mins)
             else:
-                time_left_str = "Starts Soon"
+                time_left_str = "Searching..."
             
             formatted_games[g_name] = {
                 'count': cnt,
