@@ -16,10 +16,12 @@ class LogStreamer:
         self.prog_bracket_re = re.compile(r'\[(?:Drop Progress|Progress|Mining)\]\s*(\d+)\s*(?:/|of)\s*(\d+)', re.IGNORECASE)
         self.prog_pct_re = re.compile(r'(\d+(?:\.\d+)?)\s*%', re.IGNORECASE)
         
-        # 2. Specific C# bot drop patterns
+        # 2. Specific C# bot drop and campaign patterns
         self.time_drop_re = re.compile(r'Time based drops\s*:\s*(.+)$', re.IGNORECASE)
         self.drop_generic_re = re.compile(r'(?:Active drop|Mining drop|Claimed drop|Current drop)\s*[:\-]\s*(.+)$', re.IGNORECASE)
         self.campaign_drop_re = re.compile(r'Current drop campaign\s*:\s*([^,\(\n\r]+)', re.IGNORECASE)
+        self.checking_campaign_re = re.compile(r'Checking\s+"[^"]+"\s*\("([^"]+)"\)', re.IGNORECASE)
+        self.campaign_completed_re = re.compile(r'Campaign\s+"([^"]+)"\s*already completed', re.IGNORECASE)
         self.drop_re_quotes = re.compile(r'Drop\s+"([^"]+)"', re.IGNORECASE)
         
         # 3. Streamer patterns (STRICT: only actual stream watch / events)
@@ -28,24 +30,51 @@ class LogStreamer:
         self.st_priority_re = re.compile(r'Selected priority channel "([^"]+)"', re.IGNORECASE)
         self.st_watching_quotes_re = re.compile(r'watching\s+"([^"]+)"', re.IGNORECASE)
 
+        # Track persistent watching state per account
+        self._account_states = {}
+
     def parse_logs(self, logs: str) -> dict:
         telemetry = {}
         if not logs:
             return telemetry
             
-        for line in logs.splitlines():
-            line_str = line.strip()
+        lines = logs.splitlines()
+        
+        # Find account login first
+        login = None
+        for line in reversed(lines):
+            u_match = self.user_re.search(line)
+            if u_match:
+                login = u_match.group(1).strip()
+                telemetry['account_login'] = login
+                break
+
+        state = self._account_states.setdefault(login or 'default', {
+            'last_drop': '',
+            'spade_ticks': 0,
+            'explicit_progress': False
+        })
+
+        spade_count = 0
+        new_campaign_detected = None
+        campaign_completed_detected = False
+
+        for line_str in lines:
+            line_str = line_str.strip()
             if not line_str:
                 continue
 
-            # 0. Account login parsing
-            u_match = self.user_re.search(line_str)
-            if u_match:
-                telemetry['account_login'] = u_match.group(1).strip()
+            # Check if previous campaign completed
+            if self.campaign_completed_re.search(line_str) or 'removing' in line_str.lower() and 'finished campaigns' in line_str.lower():
+                campaign_completed_detected = True
 
-            # 1. Progress parsing (ONLY match lines with 'minutes' or '[Drop Progress]')
-            # Explicitly ignore group pagination lines like "(1/68)" or "(4/57)"
-            if not any(ign in line_str.lower() for ign in ['group of channels', 'trying next group', 'finished campaigns', 'watching 100 seconds']):
+            # Check campaign checking lines: Checking "NARAKA: BLADEPOINT" ("JS1 PARTNER? 7.30")...
+            chk_match = self.checking_campaign_re.search(line_str)
+            if chk_match:
+                new_campaign_detected = chk_match.group(1).strip(' "\'[]:-,')
+
+            # 1. Explicit Progress parsing (e.g. "19/60 minutes watched")
+            if not any(ign in line_str.lower() for ign in ['group of channels', 'trying next group', 'finished campaigns', 'watching 100 seconds', 'watching 1999']):
                 p_match = self.prog_watched_re.search(line_str) or self.prog_min_re.search(line_str) or self.prog_bracket_re.search(line_str)
                 if p_match:
                     try:
@@ -57,6 +86,8 @@ class LogStreamer:
                             telemetry['current_minutes'] = c_min
                             telemetry['required_minutes'] = t_min
                             telemetry['percentage'] = min(100, int(round((c_min / t_min) * 100)))
+                            state['explicit_progress'] = True
+                            state['spade_ticks'] = 0
                     except Exception:
                         pass
 
@@ -77,7 +108,6 @@ class LogStreamer:
             )
             if d_match:
                 raw_d = d_match.group(1).strip()
-                # Clean quotes, brackets and extra whitespace
                 d_name = re.sub(r'["\'「」\[\]]', '', raw_d).strip(' :-,')
                 if (
                     d_name and 
@@ -88,7 +118,6 @@ class LogStreamer:
                     telemetry['drop_name'] = d_name
                     telemetry['current_drop'] = d_name
             elif 'drop_name' not in telemetry:
-                # Fallback to campaign name if specific item not yet encountered
                 c_match = self.campaign_drop_re.search(line_str)
                 if c_match:
                     c_name = c_match.group(1).strip(' "\'[]:-,')
@@ -96,7 +125,7 @@ class LogStreamer:
                         telemetry['drop_name'] = c_name
                         telemetry['current_drop'] = c_name
 
-            # 3. Streamer parsing (Strict patterns only)
+            # 3. Streamer parsing
             st_match = (
                 self.st_spade_re.search(line_str) or 
                 self.st_watching_pipe_re.search(line_str) or 
@@ -109,8 +138,29 @@ class LogStreamer:
                     telemetry['active_streamer'] = streamer
                     telemetry['is_actively_watching'] = True
 
-            if 'sendspadeevents accepted' in line_str.lower() or 'watching broadcaster' in line_str.lower():
+            if 'sendspadeevents accepted' in line_str.lower():
+                spade_count += 1
                 telemetry['is_actively_watching'] = True
+
+        # If campaign changed to a new one
+        if new_campaign_detected and 'drop_name' not in telemetry:
+            telemetry['drop_name'] = new_campaign_detected
+            telemetry['current_drop'] = new_campaign_detected
+
+        current_drop = telemetry.get('drop_name') or ''
+        if current_drop and current_drop != state['last_drop']:
+            state['last_drop'] = current_drop
+            state['spade_ticks'] = 0
+            state['explicit_progress'] = False
+
+        # Live Spade tick tracking: if in grace period (no explicit "X/Y min" line in recent logs)
+        # Count spade ticks (each tick = 20s, 3 ticks = 1 min)
+        if telemetry.get('is_actively_watching') and 'current_minutes' not in telemetry:
+            state['spade_ticks'] += max(1, spade_count)
+            estimated_mins = state['spade_ticks'] // 3
+            telemetry['current_minutes'] = estimated_mins
+            telemetry['required_minutes'] = 60
+            telemetry['percentage'] = min(100, int(round((estimated_mins / 60) * 100)))
 
         return telemetry
 
