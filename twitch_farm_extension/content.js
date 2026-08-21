@@ -1,5 +1,23 @@
 const SERVER_URL = "http://127.0.0.1:5000";
 
+// Listen for storage wipe commands from background service worker
+if (chrome && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request && request.action === "WIPE_LOCAL_STORAGE") {
+            try {
+                localStorage.clear();
+                sessionStorage.clear();
+                const panel = document.getElementById("farm-helper-panel");
+                if (panel) panel.remove();
+                console.log("%c[Content] 🧹 LocalStorage and SessionStorage cleared on queue completion", "color: #ff4757; font-weight: bold;");
+                sendResponse({ success: true });
+            } catch (e) {
+                sendResponse({ success: false, error: e.message });
+            }
+        }
+    });
+}
+
 function apiFetch(endpoint) {
     return new Promise((resolve, reject) => {
         if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {

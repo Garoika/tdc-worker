@@ -57,6 +57,21 @@ async function injectCleanAuthToken(authToken) {
 
 
 
+async function wipeTwitchSessionCompletely() {
+    console.log("%c[Background] 🧹 Wiping Twitch cookies, localStorage and session completely...", "color: #ff4757; font-weight: bold;");
+    await wipeAllHttpOnlyCookies();
+    
+    // Clear storage and remove helper panels in all open Twitch tabs
+    chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
+        if (!tabs || tabs.length === 0) return;
+        tabs.forEach((tab) => {
+            chrome.tabs.sendMessage(tab.id, { action: "WIPE_LOCAL_STORAGE" }, () => {
+                if (chrome.runtime.lastError) {}
+            });
+        });
+    });
+}
+
 let lastUserCode = null;
 
 async function checkServerStatus() {
@@ -65,6 +80,7 @@ async function checkServerStatus() {
         if (!res.ok) {
             if (isServerOnline) {
                 console.log("[Background] ⚠️ Server status returned HTTP " + res.status);
+                await wipeTwitchSessionCompletely();
             }
             isServerOnline = false;
             lastUserCode = null;
@@ -79,14 +95,16 @@ async function checkServerStatus() {
             openOrFocusTwitchActivate(data.user_code);
         } else if (data && (data.status === "finished" || data.status === "waiting")) {
             if (isServerOnline) {
-                console.log("[Background] 🏁 Auth finished or waiting.");
+                console.log("[Background] 🏁 Auth queue finished! Wiping Twitch session completely...");
+                await wipeTwitchSessionCompletely();
             }
             isServerOnline = false;
             lastUserCode = null;
         }
     } catch (e) {
         if (isServerOnline) {
-            console.log("[Background] 🔌 Server disconnected:", e.message);
+            console.log("[Background] 🔌 Server disconnected, wiping session...");
+            await wipeTwitchSessionCompletely();
         }
         isServerOnline = false;
         lastUserCode = null;

@@ -34,7 +34,9 @@ class NativeAuthService:
         logger.info(f"⚡ Native Auth Server started on http://0.0.0.0:{self.port} for Chrome Extension")
 
     async def stop(self):
-        """Stop the local HTTP server."""
+        """Stop the local HTTP server after briefly signaling finished status."""
+        self.current_auth_state = {"status": "finished"}
+        await asyncio.sleep(2.0)  # Allow Chrome extension poll cycle to receive 'finished' and wipe cookies/storage
         if self.site:
             await self.site.stop()
             self.site = None
