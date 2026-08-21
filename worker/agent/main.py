@@ -34,7 +34,10 @@ def launch_monitor():
         creationflags = 0
         if os.name == 'nt':
             creationflags = subprocess.CREATE_NEW_CONSOLE
-        monitor_proc = subprocess.Popen(cmd, creationflags=creationflags)
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        monitor_proc = subprocess.Popen(cmd, creationflags=creationflags, env=env)
         atexit.register(cleanup_monitor)
         logger.info(f"Launched companion Live Monitor Dashboard (PID: {monitor_proc.pid})")
     except Exception as e:

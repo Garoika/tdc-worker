@@ -6,6 +6,14 @@ import argparse
 import signal
 from pathlib import Path
 
+# Force UTF-8 encoding on Windows to prevent charmap UnicodeEncodeError with emojis
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 try:
     import psutil
 except ImportError:
@@ -116,7 +124,9 @@ def main():
                 parent_pid = state.get('parent_pid')
 
             # Render frame
-            node_name = state.get('node_name', 'PC')
+            node_name = state.get('node_name', 'Worker')
+            master_connected = state.get('master_connected', False)
+            uptime_str = format_uptime(state.get('uptime_seconds', 0))
             if psutil:
                 try:
                     cpu_pct = psutil.cpu_percent(interval=None)
