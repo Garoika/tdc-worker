@@ -30,9 +30,6 @@ class LogStreamer:
         self.st_priority_re = re.compile(r'Selected priority channel "([^"]+)"', re.IGNORECASE)
         self.st_watching_quotes_re = re.compile(r'watching\s+"([^"]+)"', re.IGNORECASE)
 
-        # Track persistent watching state per account
-        self._account_states = {}
-
     def parse_logs(self, logs: str) -> dict:
         telemetry = {}
         if not logs:
@@ -41,19 +38,11 @@ class LogStreamer:
         lines = logs.splitlines()
         
         # Find account login first
-        login = None
         for line in reversed(lines):
             u_match = self.user_re.search(line)
             if u_match:
-                login = u_match.group(1).strip()
-                telemetry['account_login'] = login
+                telemetry['account_login'] = u_match.group(1).strip()
                 break
-
-        state = self._account_states.setdefault(login or 'default', {
-            'last_drop': '',
-            'spade_ticks': 0,
-            'explicit_progress': False
-        })
 
         spade_count = 0
         new_campaign_detected = None
@@ -146,21 +135,6 @@ class LogStreamer:
         if new_campaign_detected and 'drop_name' not in telemetry:
             telemetry['drop_name'] = new_campaign_detected
             telemetry['current_drop'] = new_campaign_detected
-
-        current_drop = telemetry.get('drop_name') or ''
-        if current_drop and current_drop != state['last_drop']:
-            state['last_drop'] = current_drop
-            state['spade_ticks'] = 0
-            state['explicit_progress'] = False
-
-        # Live Spade tick tracking: if in grace period (no explicit "X/Y min" line in recent logs)
-        # Count spade ticks (each tick = 20s, 3 ticks = 1 min)
-        if telemetry.get('is_actively_watching') and 'current_minutes' not in telemetry:
-            state['spade_ticks'] += max(1, spade_count)
-            estimated_mins = state['spade_ticks'] // 3
-            telemetry['current_minutes'] = estimated_mins
-            telemetry['required_minutes'] = 60
-            telemetry['percentage'] = min(100, int(round((estimated_mins / 60) * 100)))
 
         return telemetry
 
