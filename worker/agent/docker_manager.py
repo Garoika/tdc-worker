@@ -65,7 +65,7 @@ class DockerManager:
             "LogLevel": 0,
             "WebhookURL": "",
             "WaitingSeconds": 120,
-            "AttemptToWatch": 999999,
+            "AttemptToWatch": 3,
             "WatchBrowserHeadless": True,
             "MinimizeInTray": False
         }
