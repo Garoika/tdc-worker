@@ -117,18 +117,28 @@ def main():
 
             # Render frame
             node_name = state.get('node_name', 'PC')
-            runner_mode = state.get('runner_mode', 'PROCESS')
-            master_connected = state.get('master_connected', False)
-            uptime_str = format_uptime(state.get('uptime_seconds', 0))
-            cpu_pct = state.get('cpu_percent', 0.0)
-            ram_used = state.get('ram_used_mb', 0.0)
-            ram_tot = state.get('ram_total_mb', 0.0)
+            if psutil:
+                try:
+                    cpu_pct = psutil.cpu_percent(interval=None)
+                    vmem = psutil.virtual_memory()
+                    ram_used = vmem.used / (1024 * 1024)
+                    ram_tot = vmem.total / (1024 * 1024)
+                except Exception:
+                    cpu_pct = state.get('cpu_percent', 0.0)
+                    ram_used = state.get('ram_used_mb', 0.0)
+                    ram_tot = state.get('ram_total_mb', 0.0)
+            else:
+                cpu_pct = state.get('cpu_percent', 0.0)
+                ram_used = state.get('ram_used_mb', 0.0)
+                ram_tot = state.get('ram_total_mb', 0.0)
+
             total_acc = state.get('total_accounts', 0)
             farmer_pid = state.get('farmer_pid') or 'Running'
             games = state.get('games', {})
             recent_events = state.get('recent_events', [])
 
             status_badge = f"{GREEN}ONLINE 🟢{RESET}" if master_connected else f"{RED}CONNECTING... 🔴{RESET}"
+            ram_str = f"{WHITE}{ram_used/1024:.1f} GB{RESET} / {DIM}{ram_tot/1024:.1f} GB{RESET}" if ram_tot > 0 else f"{WHITE}{ram_used:.0f} MB{RESET}"
             
             clear_screen()
             
@@ -136,8 +146,8 @@ def main():
                 f"{CYAN}╔════════════════════════════════════════════════════════════════════════════════╗{RESET}",
                 f"{CYAN}║{BOLD}{WHITE}                   ⚡ TDC WORKER — LIVE MONITOR DASHBOARD ⚡                    {RESET}{CYAN}║{RESET}",
                 f"{CYAN}╚════════════════════════════════════════════════════════════════════════════════╝{RESET}",
-                f" {BOLD}Node:{RESET} {WHITE}{node_name}{RESET} ({status_badge})   {BOLD}Mode:{RESET} {YELLOW}{runner_mode}{RESET}   {BOLD}PID:{RESET} {DIM}{farmer_pid}{RESET}   {BOLD}Uptime:{RESET} {WHITE}{uptime_str}{RESET}",
-                f" {BOLD}CPU:{RESET}  {render_cpu_bar(cpu_pct)}    {BOLD}RAM:{RESET} {WHITE}{ram_used:.0f} MB{RESET} / {DIM}{ram_tot/1024:.1f} GB{RESET}   {BOLD}Time:{RESET} {DIM}{time.strftime('%H:%M:%S')}{RESET}",
+                f" {BOLD}Node:{RESET} {WHITE}{node_name}{RESET} ({status_badge})    {BOLD}PID:{RESET} {DIM}{farmer_pid}{RESET}    {BOLD}Uptime:{RESET} {WHITE}{uptime_str}{RESET}    {BOLD}Time:{RESET} {DIM}{time.strftime('%H:%M:%S')}{RESET}",
+                f" {BOLD}CPU:{RESET}  {render_cpu_bar(cpu_pct)}    {BOLD}RAM:{RESET} {ram_str}",
                 f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}",
                 f" {BOLD}👥 ACTIVE FARMING ACCOUNTS:{RESET} {GREEN}{BOLD}{total_acc}{RESET} {DIM}accounts assigned to this node{RESET}",
                 f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}",

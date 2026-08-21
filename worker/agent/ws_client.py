@@ -87,7 +87,13 @@ class WebSocketClient:
                 msg = json.loads(message_str)
                 msg_type = msg.get('type')
                 
-                if msg_type == 'SPAWN_CONTAINER':
+                if msg_type == 'INIT':
+                    worker_name = msg.get('name')
+                    if worker_name:
+                        state_manager.update_system_info(node_name=worker_name)
+                        logger.info(f"Node identified as: {worker_name}")
+
+                elif msg_type == 'SPAWN_CONTAINER':
                     asyncio.create_task(self.handle_spawn_container(msg))
 
                 elif msg_type == 'STOP_CONTAINER':
@@ -274,9 +280,9 @@ class WebSocketClient:
                 metrics_data = self.metrics.to_dict()
                 current_containers = await self.docker.get_running_container_count()
                 state_manager.update_metrics(
-                    cpu=metrics_data.get('cpu_percent', 0.0),
-                    ram_used=metrics_data.get('memory_used_mb', 0.0),
-                    ram_total=metrics_data.get('memory_total_mb', 0.0)
+                    cpu=metrics_data.get('cpu_usage_percent', 0.0),
+                    ram_used=metrics_data.get('ram_used_mb', 0.0),
+                    ram_total=metrics_data.get('ram_total_mb', 0.0)
                 )
                 await self.send({
                     "type": "HEARTBEAT",

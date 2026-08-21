@@ -74,7 +74,7 @@ RUNNER_TYPE = (os.environ.get('RUNNER_TYPE') or file_config.get('runner_type') o
 DOCKER_IMAGE = os.environ.get('DOCKER_IMAGE') or file_config.get('docker_image') or 'fools228/tdc-farmer:latest'
 MAX_CONTAINERS = int(os.environ.get('MAX_CONTAINERS', '100'))
 HEARTBEAT_INTERVAL = int(os.environ.get('HEARTBEAT_INTERVAL', '3'))
-WORKER_PUBLIC_IP = os.environ.get('WORKER_PUBLIC_IP') or file_config.get('worker_public_ip') or ''
+WORKER_NAME = os.environ.get('WORKER_NAME') or file_config.get('worker_name') or 'Worker'
 LOG_TAIL_LINES = int(os.environ.get('LOG_TAIL_LINES', '50'))
 
 # Farmer binary paths for Process Mode

@@ -4,6 +4,7 @@ import time
 import logging
 from pathlib import Path
 from typing import Dict, Any, List
+from agent.config import WORKER_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class StateManager:
             return
         self._initialized = True
         self.start_time = time.time()
-        self.node_name = "PC"
+        self.node_name = WORKER_NAME
         self.runner_mode = "PROCESS"
         self.master_url = ""
         self.master_connected = False
