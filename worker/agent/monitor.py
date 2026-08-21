@@ -175,9 +175,9 @@ def main():
                 lines.append(f"   {DIM}No accounts currently assigned. Waiting for master server tasks...{RESET}")
 
             lines.append("")
-            lines.append(f" {BOLD}📜 RECENT ACTIVITY LOG (Latest {min(len(recent_events), 20)} events):{RESET}")
+            lines.append(f" {BOLD}📜 RECENT ACTIVITY:{RESET}")
             if recent_events:
-                for evt in recent_events[:20]:
+                for evt in recent_events[:5]:
                     lines.append(f"  {CYAN}•{RESET} {DIM}{evt}{RESET}")
             else:
                 lines.append(f"  {DIM}Waiting for telemetry stream from farmer process...{RESET}")
