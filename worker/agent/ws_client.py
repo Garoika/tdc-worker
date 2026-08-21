@@ -4,15 +4,15 @@ import logging
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from typing import Any
 from agent.config import HEARTBEAT_INTERVAL, LOG_TAIL_LINES
-from agent.docker_manager import DockerManager
 from agent.metrics import SystemMetrics
 from agent.log_streamer import LogStreamer
 
 logger = logging.getLogger(__name__)
 
 class WebSocketClient:
-    def __init__(self, master_url: str, worker_token: str, docker_manager: DockerManager, metrics_collector: SystemMetrics):
+    def __init__(self, master_url: str, worker_token: str, docker_manager: Any, metrics_collector: SystemMetrics):
         self.master_url = master_url
         self.worker_token = worker_token
         self.docker = docker_manager
@@ -21,7 +21,7 @@ class WebSocketClient:
         self.ws = None
         self.running = False
         self.tasks = []
-        self.spawn_semaphore = asyncio.Semaphore(2)
+        self.spawn_semaphore = asyncio.Semaphore(50)
 
     async def connect(self):
         headers = {'Authorization': f'Bearer {self.worker_token}'} if self.worker_token else {}

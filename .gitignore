@@ -16,3 +16,10 @@ env/
 # Configs & Tokens
 .worker_config.json
 *.env
+
+# Farmer Bin Temp & Logs
+farmer_bin/logs/
+farmer_bin/config*.json
+farmer_bin/Configuration/
+farmer_bin/appsettings.Development.json
+
