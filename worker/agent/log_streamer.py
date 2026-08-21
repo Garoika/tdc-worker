@@ -30,6 +30,9 @@ class LogStreamer:
         self.st_priority_re = re.compile(r'Selected priority channel "([^"]+)"', re.IGNORECASE)
         self.st_watching_quotes_re = re.compile(r'watching\s+"([^"]+)"', re.IGNORECASE)
 
+        # Track persistent watching state per account
+        self._states = {}
+
     def parse_logs(self, logs: str) -> dict:
         telemetry = {}
         if not logs:
@@ -38,26 +41,31 @@ class LogStreamer:
         lines = logs.splitlines()
         
         # Find account login first
+        login = None
         for line in reversed(lines):
             u_match = self.user_re.search(line)
             if u_match:
-                telemetry['account_login'] = u_match.group(1).strip()
+                login = u_match.group(1).strip()
+                telemetry['account_login'] = login
                 break
 
-        spade_count = 0
+        state_key = login or 'default'
+        state = self._states.setdefault(state_key, {
+            'drop_name': 'Drops',
+            'current_minutes': 0,
+            'required_minutes': 60,
+            'spade_count': 0
+        })
+
         new_campaign_detected = None
-        campaign_completed_detected = False
+        explicit_minutes_found = False
 
         for line_str in lines:
             line_str = line_str.strip()
             if not line_str:
                 continue
 
-            # Check if previous campaign completed
-            if self.campaign_completed_re.search(line_str) or 'removing' in line_str.lower() and 'finished campaigns' in line_str.lower():
-                campaign_completed_detected = True
-
-            # Check campaign checking lines: Checking "NARAKA: BLADEPOINT" ("JS1 PARTNER? 7.30")...
+            # Detect campaign checking / switching
             chk_match = self.checking_campaign_re.search(line_str)
             if chk_match:
                 new_campaign_detected = chk_match.group(1).strip(' "\'[]:-,')
@@ -70,18 +78,15 @@ class LogStreamer:
                         c_min = int(p_match.group(1))
                         t_min = int(p_match.group(2))
                         if 0 <= c_min <= 10000 and 0 < t_min <= 10000:
-                            telemetry['watched_minutes'] = c_min
-                            telemetry['target_minutes'] = t_min
-                            telemetry['current_minutes'] = c_min
-                            telemetry['required_minutes'] = t_min
-                            telemetry['percentage'] = min(100, int(round((c_min / t_min) * 100)))
-                            state['explicit_progress'] = True
-                            state['spade_ticks'] = 0
+                            state['current_minutes'] = c_min
+                            state['required_minutes'] = t_min
+                            state['spade_count'] = 0
+                            explicit_minutes_found = True
                     except Exception:
                         pass
 
                 pct_match = self.prog_pct_re.search(line_str)
-                if pct_match and 'percentage' not in telemetry:
+                if pct_match and not explicit_minutes_found:
                     try:
                         pct_val = int(float(pct_match.group(1)))
                         if 0 <= pct_val <= 100:
@@ -105,14 +110,12 @@ class LogStreamer:
                     d_name.lower() not in ['info', 'warning', 'error', 'debug', 'minutes', 'min', 'null', 'none']
                 ):
                     telemetry['drop_name'] = d_name
-                    telemetry['current_drop'] = d_name
             elif 'drop_name' not in telemetry:
                 c_match = self.campaign_drop_re.search(line_str)
                 if c_match:
                     c_name = c_match.group(1).strip(' "\'[]:-,')
                     if c_name and len(c_name) >= 2 and c_name.lower() not in ['info', 'warning', 'error']:
                         telemetry['drop_name'] = c_name
-                        telemetry['current_drop'] = c_name
 
             # 3. Streamer parsing
             st_match = (
@@ -128,13 +131,31 @@ class LogStreamer:
                     telemetry['is_actively_watching'] = True
 
             if 'sendspadeevents accepted' in line_str.lower():
-                spade_count += 1
                 telemetry['is_actively_watching'] = True
 
-        # If campaign changed to a new one
+        # Campaign change check
         if new_campaign_detected and 'drop_name' not in telemetry:
             telemetry['drop_name'] = new_campaign_detected
-            telemetry['current_drop'] = new_campaign_detected
+
+        current_drop = telemetry.get('drop_name') or state['drop_name']
+        if current_drop and current_drop != state['drop_name']:
+            state['drop_name'] = current_drop
+            state['current_minutes'] = 0
+            state['spade_count'] = 0
+
+        # Seamless live minute progression while stream is active
+        if telemetry.get('is_actively_watching') and not explicit_minutes_found:
+            state['spade_count'] += 1
+            if state['spade_count'] >= 3:
+                state['spade_count'] = 0
+                state['current_minutes'] = min(state['required_minutes'], state['current_minutes'] + 1)
+
+        req_m = state['required_minutes']
+        curr_m = state['current_minutes']
+        telemetry['drop_name'] = state['drop_name']
+        telemetry['current_minutes'] = curr_m
+        telemetry['required_minutes'] = req_m
+        telemetry['percentage'] = min(100, int(round((curr_m / req_m) * 100))) if req_m > 0 else 0
 
         return telemetry
 
