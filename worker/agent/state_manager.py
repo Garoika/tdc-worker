@@ -139,6 +139,8 @@ class StateManager:
             if game not in game_stats:
                 game_stats[game] = {
                     'count': 0,
+                    'active_count': 0,
+                    'waiting_count': 0,
                     'streamers': set(),
                     'min_watched': None,
                     'required': 60
@@ -155,8 +157,11 @@ class StateManager:
                 game_stats[game]['min_watched'] = watched
                 
             st = t.get('streamer', '')
-            if st:
+            if st and st.lower() not in ['seeking streamer...', 'auto-seeking...', 'searching...', 'none', '']:
                 game_stats[game]['streamers'].add(st)
+                game_stats[game]['active_count'] += 1
+            else:
+                game_stats[game]['waiting_count'] += 1
 
         # Format game stats for json
         formatted_games = {}
@@ -165,10 +170,18 @@ class StateManager:
             min_w = g_data['min_watched'] if g_data['min_watched'] is not None else 0
             req_w = g_data['required']
             left_mins = max(0, req_w - min_w)
-            time_left_str = format_duration_en(left_mins)
+            is_active = len(g_data['streamers']) > 0 and g_data['active_count'] > 0
+            
+            if is_active:
+                time_left_str = format_duration_en(left_mins)
+            else:
+                time_left_str = "Starts Soon"
             
             formatted_games[g_name] = {
                 'count': cnt,
+                'active_count': g_data['active_count'],
+                'waiting_count': g_data['waiting_count'],
+                'is_active': is_active,
                 'streamers': list(g_data['streamers'])[:5],
                 'min_watched': min_w,
                 'required_minutes': req_w,
