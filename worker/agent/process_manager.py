@@ -165,17 +165,14 @@ class ProcessManager:
             "MinimizeInTray": False
         }
 
-        config_file = self.bin_dir / "config.json"
         config_dir = self.bin_dir / "Configuration"
         config_dir.mkdir(parents=True, exist_ok=True)
-        config_file_docker = config_dir / "config.json"
+        config_file = config_dir / "config.json"
 
         try:
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=2)
-            with open(config_file_docker, 'w', encoding='utf-8') as f:
-                json.dump(config_data, f, indent=2)
-            logger.info(f"[ProcessManager] Saved unified config with {len(twitch_users)} account(s) to {config_file} and {config_file_docker}")
+            logger.info(f"[ProcessManager] Saved unified config with {len(twitch_users)} account(s) to {config_file}")
         except Exception as e:
             logger.error(f"[ProcessManager] Failed to write config.json: {e}")
             return
