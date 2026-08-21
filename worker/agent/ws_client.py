@@ -8,6 +8,7 @@ from typing import Any
 from agent.config import HEARTBEAT_INTERVAL, LOG_TAIL_LINES
 from agent.metrics import SystemMetrics
 from agent.log_streamer import LogStreamer
+from agent.native_auth_server import NativeAuthService
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ class WebSocketClient:
         self.docker = docker_manager
         self.metrics = metrics_collector
         self.log_streamer = LogStreamer(self.docker)
+        self.native_auth = NativeAuthService(port=5000)
+        self.auth_cancel_event = asyncio.Event()
         self.ws = None
         self.running = False
         self.tasks = []
@@ -97,13 +100,9 @@ class WebSocketClient:
 
                 elif msg_type == 'CANCEL_AUTH_QUEUE':
                     self.auth_cancelled = True
+                    self.auth_cancel_event.set()
                     logger.info("Auth queue cancelled by server")
-                    if hasattr(self, 'current_auth_container') and self.current_auth_container:
-                        try:
-                            cid = self.current_auth_container.id
-                            asyncio.create_task(self.docker.stop_container(cid))
-                        except Exception:
-                            pass
+                    asyncio.create_task(self.native_auth.stop())
 
                 elif msg_type == 'GET_CONTAINER_LOGS':
                     asyncio.create_task(self.handle_get_container_logs(msg))
@@ -165,118 +164,69 @@ class WebSocketClient:
             await self.docker.stop_container(container_id=c['container_id'])
 
     async def process_auth_queue(self, accounts: list):
-        """Process a queue of accounts for Twitch Device Code authorization, one at a time on port 5000."""
-        import os
-        import json
-        import tempfile
-
+        """Process a queue of accounts for Twitch Device Code authorization via pure Python HTTP server on port 5000."""
         self.auth_cancelled = False
+        self.auth_cancel_event.clear()
         total = len(accounts)
-        logger.info(f"Starting auth queue for {total} account(s)")
+        logger.info(f"Starting native auth queue for {total} account(s)")
         
-        for idx, acc in enumerate(accounts, 1):
-            if self.auth_cancelled:
-                logger.info("Auth queue cancelled, stopping")
-                break
+        try:
+            await self.native_auth.start()
+
+            for idx, acc in enumerate(accounts, 1):
+                if self.auth_cancelled:
+                    logger.info("Auth queue cancelled, stopping")
+                    break
+                    
+                acc_id = acc.get('id')
+                login = acc.get('login')
                 
-            acc_id = acc.get('id')
-            login = acc.get('login')
-            
-            # Notify server of progress
-            await self.send({
-                "type": "ACCOUNT_AUTH_PROGRESS",
-                "account_id": acc_id,
-                "login": login,
-                "current": idx,
-                "total": total
-            })
-            
-            # Create temp config directory for this account
-            temp_dir = tempfile.mkdtemp(prefix=f"tdc_auth_{login}_")
-            config_file = os.path.join(temp_dir, f"config-{login}.json")
-            
-            container = None
-            try:
-                container = await self.docker.run_auth_container(acc, temp_dir)
-                self.current_auth_container = container
-                logger.info(f"Auth container launched for {login}, waiting for Chrome extension...")
+                # Notify server of progress
+                await self.send({
+                    "type": "ACCOUNT_AUTH_PROGRESS",
+                    "account_id": acc_id,
+                    "login": login,
+                    "current": idx,
+                    "total": total
+                })
                 
-                # Poll config file for ClientSecret (up to 10 minutes)
-                success = False
-                for _ in range(300):
+                try:
+                    auth_result = await self.native_auth.authorize_account(
+                        acc,
+                        cancel_event=self.auth_cancel_event
+                    )
+                    
+                    await self.send({
+                        "type": "ACCOUNT_AUTH_SUCCESS",
+                        "account_id": acc_id,
+                        "login": login,
+                        "client_secret": auth_result["client_secret"],
+                        "twitch_user_id": auth_result["twitch_user_id"],
+                        "current": idx,
+                        "total": total
+                    })
+                    logger.info(f"✨ Account {login} authorized successfully ({idx}/{total})")
+                    
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
                     if self.auth_cancelled:
                         break
-                    if os.path.exists(config_file):
-                        try:
-                            with open(config_file, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                            if '"ClientSecret"' in content:
-                                data = json.loads(content)
-                                users = data.get('TwitchSettings', {}).get('TwitchUsers', [])
-                                client_secret = ""
-                                twitch_user_id = ""
-                                if users:
-                                    client_secret = users[0].get('ClientSecret', '')
-                                    twitch_user_id = users[0].get('Id', '')
-                                
-                                await self.send({
-                                    "type": "ACCOUNT_AUTH_SUCCESS",
-                                    "account_id": acc_id,
-                                    "login": login,
-                                    "client_secret": client_secret,
-                                    "twitch_user_id": twitch_user_id,
-                                    "current": idx,
-                                    "total": total
-                                })
-                                success = True
-                                logger.info(f"Account {login} authorized successfully")
-                                break
-                        except Exception as e:
-                            logger.error(f"Error reading config for {login}: {e}")
-                    await asyncio.sleep(2)
-                
-                if not success and not self.auth_cancelled:
-                    logger.warning(f"Auth timed out for {login}")
+                    logger.error(f"Auth error for {login}: {e}")
                     await self.send({
                         "type": "ACCOUNT_AUTH_FAILED",
                         "account_id": acc_id,
                         "login": login,
                         "current": idx,
                         "total": total,
-                        "error": "Timed out waiting for Chrome extension authorization (10 min)"
+                        "error": str(e)
                     })
-                    
-            except Exception as e:
-                logger.error(f"Auth container error for {login}: {e}")
-                await self.send({
-                    "type": "ACCOUNT_AUTH_FAILED",
-                    "account_id": acc_id,
-                    "login": login,
-                    "current": idx,
-                    "total": total,
-                    "error": str(e)
-                })
-            finally:
-                self.current_auth_container = None
-                if container:
-                    try:
-                        cname = getattr(container, 'name', container.id)
-                        logger.info(f"Stopping auth container {cname}...")
-                        await asyncio.wait_for(self.docker.stop_container(container.id), timeout=15)
-                        logger.info(f"Auth container {cname} removed.")
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Timed out stopping auth container, retrying...")
-                        try:
-                            await self.docker.stop_container(container.id)
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        logger.error(f"Error stopping auth container: {e}")
-
-        logger.info("✨ Auth queue processing complete! All containers cleaned up.")
-        await self.send({
-            "type": "ACCOUNT_AUTH_COMPLETE"
-        })
+        finally:
+            await self.native_auth.stop()
+            logger.info("✨ Auth queue processing complete! Native auth server stopped.")
+            await self.send({
+                "type": "ACCOUNT_AUTH_COMPLETE"
+            })
 
     async def send(self, message: dict):
         if self.ws:
