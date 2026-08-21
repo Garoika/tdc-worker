@@ -5,6 +5,7 @@ from aiohttp import web
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger('worker.native_auth')
+logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 
 CLIENT_ID = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
 SCOPES = "channel_read chat:read user_blocks_edit user_blocks_read user_follows_edit user_read"
@@ -25,7 +26,7 @@ class NativeAuthService:
         """Start the local HTTP server on port 5000."""
         if self.is_running:
             return
-        self.runner = web.AppRunner(self.app)
+        self.runner = web.AppRunner(self.app, access_log=None)
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, '0.0.0.0', self.port)
         await self.site.start()
