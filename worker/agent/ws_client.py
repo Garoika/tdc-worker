@@ -323,7 +323,7 @@ class WebSocketClient:
                         })
                         continue
                         
-                    telemetry = await self.log_streamer.process_container_logs(cid, LOG_TAIL_LINES)
+                    telemetry = await self.log_streamer.process_container_logs(cid, LOG_TAIL_LINES, job_id=job_id, login=login)
                     if not login and telemetry:
                         login = telemetry.get('account_login') or ''
 

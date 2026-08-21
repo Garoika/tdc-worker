@@ -298,36 +298,38 @@ class ProcessManager:
         tail: int = 0
     ) -> str:
         """
-        Return logs for the specified account/job filtered from the unified buffer,
-        or the full log if no specific filter matches.
+        Return logs strictly for the specified account/job filtered from the unified buffer.
+        Never leaks logs from other accounts to prevent telemetry cross-talk between games.
         """
-        # Determine target login
         target_login = login
+        if not target_login and container_id and container_id.startswith("proc_"):
+            clean_jid = container_id.replace("proc_", "")
+            async with self._lock:
+                for jid, info in self.active_jobs.items():
+                    if jid.startswith(clean_jid) or jid == container_id:
+                        target_login = info['login']
+                        break
+
         if not target_login and job_id:
             async with self._lock:
                 if job_id in self.active_jobs:
                     target_login = self.active_jobs[job_id]['login']
                 else:
                     for jid, info in self.active_jobs.items():
-                        if jid[:8] == job_id[:8]:
+                        if jid.startswith(job_id[:8]) or jid == job_id:
                             target_login = info['login']
                             break
 
         lines = list(self.log_buffer)
 
         if target_login:
-            tag1 = f"[TwitchUser - {target_login}]"
-            tag2 = f'"{target_login}"'
-            user_lines = [
-                line for line in lines
-                if tag1 in line or tag2 in line or "Starting bot for user" in line or "[ - ]" in line
-            ]
-            if user_lines:
-                if tail > 0:
-                    user_lines = user_lines[-tail:]
-                return "\n".join(user_lines)
+            tag = f"[TwitchUser - {target_login}]"
+            user_lines = [line for line in lines if tag in line]
+            if tail > 0:
+                user_lines = user_lines[-tail:]
+            return "\n".join(user_lines)
 
-        # Default fallback
+        # Global logs fallback if no specific account requested
         if tail > 0:
             lines = lines[-tail:]
         return "\n".join(lines)

@@ -136,6 +136,6 @@ class LogStreamer:
 
         return telemetry
 
-    async def process_container_logs(self, container_id: str, tail: int) -> dict:
-        logs = await self.docker_manager.get_container_logs(container_id, tail=tail)
+    async def process_container_logs(self, container_id: str, tail: int, job_id: str = None, login: str = None) -> dict:
+        logs = await self.docker_manager.get_container_logs(container_id=container_id, job_id=job_id, login=login, tail=tail)
         return self.parse_logs(logs)
