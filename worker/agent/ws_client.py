@@ -9,6 +9,7 @@ from agent.config import HEARTBEAT_INTERVAL, LOG_TAIL_LINES
 from agent.metrics import SystemMetrics
 from agent.log_streamer import LogStreamer
 from agent.native_auth_server import NativeAuthService
+from agent.state_manager import state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class WebSocketClient:
         while self.running:
             try:
                 await self.connect()
+                state_manager.update_system_info(master_connected=True)
                 retry_delay = 1
                 
                 # Sync state on connect
@@ -70,6 +72,7 @@ class WebSocketClient:
                 
             except (ConnectionClosed, ConnectionRefusedError, Exception) as e:
                 logger.error(f"WebSocket error: {e}")
+                state_manager.update_system_info(master_connected=False)
                 self.cancel_tasks()
                 if not self.running:
                     break
@@ -270,6 +273,11 @@ class WebSocketClient:
             try:
                 metrics_data = self.metrics.to_dict()
                 current_containers = await self.docker.get_running_container_count()
+                state_manager.update_metrics(
+                    cpu=metrics_data.get('cpu_percent', 0.0),
+                    ram_used=metrics_data.get('memory_used_mb', 0.0),
+                    ram_total=metrics_data.get('memory_total_mb', 0.0)
+                )
                 await self.send({
                     "type": "HEARTBEAT",
                     "metrics": metrics_data,
@@ -302,6 +310,7 @@ class WebSocketClient:
                     login = labels.get('tdc.login') or c.get('login') or ''
                     job_id = labels.get('tdc.job_id') or ''
                     account_id = labels.get('tdc.account_id') or ''
+                    game_name = labels.get('tdc.game') or c.get('game', '')
 
                     if status in ['exited', 'dead']:
                         await self.send({
@@ -319,6 +328,8 @@ class WebSocketClient:
                         login = telemetry.get('account_login') or ''
 
                     if telemetry or login:
+                        if telemetry and login:
+                            state_manager.record_telemetry(login, game_name, telemetry)
                         await self.send({
                             "type": "TELEMETRY_UPDATE",
                             "container_id": cid,
@@ -327,7 +338,7 @@ class WebSocketClient:
                             "account_id": account_id,
                             "account_login": login,
                             "login": login,
-                            "game": labels.get('tdc.game') or c.get('game', ''),
+                            "game": game_name,
                             "telemetry": telemetry or {}
                         })
                     await asyncio.sleep(0.1)

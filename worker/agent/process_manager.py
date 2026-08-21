@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from agent.config import FARMER_EXE, FARMER_BIN_DIR
+from agent.state_manager import state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class ProcessManager:
                 'login': login,
                 'game': target.get('game', 'Grand Theft Auto V')
             }
+            state_manager.update_jobs(self.active_jobs)
 
         # Debounce restart: if multiple jobs arrive in a batch (e.g. 85 at once),
         # restart the process only once after the batch settles (1.5 seconds delay).
@@ -85,6 +87,7 @@ class ProcessManager:
                 login = self.active_jobs[target_job_id]['login']
                 logger.info(f"[ProcessManager] Stopping job {target_job_id[:8]} (account: {login})")
                 del self.active_jobs[target_job_id]
+                state_manager.update_jobs(self.active_jobs)
                 self._schedule_debounced_restart(delay=1.0)
                 return True
             else:
@@ -201,6 +204,7 @@ class ProcessManager:
                 env=env
             )
             logger.info(f"[ProcessManager] TwitchDropsBot started successfully (PID: {self.process.pid})")
+            state_manager.update_system_info(farmer_pid=self.process.pid)
 
             # Start background reader thread
             self.log_reader_thread = threading.Thread(
@@ -235,6 +239,7 @@ class ProcessManager:
             except Exception as e:
                 logger.debug(f"[ProcessManager] Error terminating process: {e}")
             self.process = None
+            state_manager.update_system_info(farmer_pid=None)
 
     async def list_running_containers(self) -> List[Dict[str, Any]]:
         """Return list of all active farming accounts in the standard format."""
