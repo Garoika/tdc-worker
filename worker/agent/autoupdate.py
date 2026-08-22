@@ -66,16 +66,31 @@ class AutoUpdater:
             remote_commit = stdout_remote.decode().strip()
 
             if local_commit and remote_commit and local_commit != remote_commit:
-                logger.info(f"🔄 [AutoUpdate] New version detected on GitHub ({local_commit[:7]} -> {remote_commit[:7]})! Pulling update...")
+                logger.info(f"🔄 [AutoUpdate] New version detected on GitHub ({local_commit[:7]} -> {remote_commit[:7]})! Updating repository...")
                 
                 proc_pull = await asyncio.create_subprocess_exec(
-                    "git", "pull", "origin", "main",
+                    "git", "reset", "--hard", "origin/main",
                     cwd=self.repo_dir,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
                 )
-                stdout_p, _ = await proc_pull.communicate()
-                logger.info(f"[AutoUpdate] Git pull output: {stdout_p.decode().strip()}")
+                stdout_p, stderr_p = await proc_pull.communicate()
+                
+                # Verify that HEAD actually changed to remote_commit
+                proc_verify = await asyncio.create_subprocess_exec(
+                    "git", "rev-parse", "HEAD",
+                    cwd=self.repo_dir,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout_v, _ = await proc_verify.communicate()
+                new_local_commit = stdout_v.decode().strip()
+
+                if new_local_commit != remote_commit:
+                    logger.warning(f"[AutoUpdate] Git reset failed to update HEAD to {remote_commit[:7]}. Output: {stderr_p.decode().strip()}. Skipping restart to avoid infinite loop.")
+                    return False
+
+                logger.info(f"[AutoUpdate] Successfully updated to {remote_commit[:7]}.")
 
                 # 3. Update pip dependencies if requirements.txt exists
                 req_file = os.path.join(self.worker_dir, "requirements.txt")
