@@ -1,9 +1,11 @@
 import os
+import re
 import sys
 import time
 import json
-import argparse
+import shutil
 import signal
+import argparse
 from pathlib import Path
 
 # Force UTF-8 encoding on Windows to prevent charmap UnicodeEncodeError with emojis
@@ -33,18 +35,45 @@ MAGENTA = "\033[35m"
 RED = "\033[31m"
 WHITE = "\033[37m"
 
+ANSI_REGEX = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+
+def visible_len(s: str) -> int:
+    """Calculates visible character length of a string ignoring ANSI color codes."""
+    return len(ANSI_REGEX.sub('', s))
+
+def pad_visible(s: str, width: int, align: str = '<') -> str:
+    """Pads string to width based on its visible length."""
+    vlen = visible_len(s)
+    if vlen >= width:
+        return s
+    pad = " " * (width - vlen)
+    if align == '>':
+        return pad + s
+    elif align == '^':
+        half = (width - vlen) // 2
+        return (" " * half) + s + (" " * (width - vlen - half))
+    return s + pad
+
+def truncate_visible(s: str, max_width: int) -> str:
+    """Truncates raw string to max_width cleanly."""
+    if len(s) <= max_width:
+        return s
+    return s[:max(0, max_width - 3)] + "..." if max_width >= 4 else s[:max_width]
+
 def enable_windows_ansi():
     """Enable VT100 / ANSI escape sequences in Windows Console."""
     if os.name == 'nt':
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        h_stdout = kernel32.GetStdHandle(-11)
-        mode = ctypes.c_ulong()
-        kernel32.GetConsoleMode(h_stdout, ctypes.byref(mode))
-        mode.value |= 0x0004 | 0x0008  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
-        kernel32.SetConsoleMode(h_stdout, mode)
-        # Set console window title
-        ctypes.windll.kernel32.SetConsoleTitleW("TDC Cluster — Live Worker Monitor")
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            h_stdout = kernel32.GetStdHandle(-11)
+            mode = ctypes.c_ulong()
+            kernel32.GetConsoleMode(h_stdout, ctypes.byref(mode))
+            mode.value |= 0x0004 | 0x0008  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            kernel32.SetConsoleMode(h_stdout, mode)
+            ctypes.windll.kernel32.SetConsoleTitleW("TDC Cluster — Live Worker Monitor")
+        except Exception:
+            pass
 
 def render_cpu_bar(percent: float, width: int = 10) -> str:
     filled = int(round((percent / 100) * width))
@@ -110,6 +139,11 @@ def main():
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     break
 
+            # Read terminal dimensions dynamically on each frame
+            term_size = shutil.get_terminal_size(fallback=(80, 24))
+            cols = max(55, min(240, term_size.columns))
+            rows = max(18, term_size.lines)
+
             # Read state
             state = {}
             if STATE_FILE.exists():
@@ -119,14 +153,13 @@ def main():
                 except Exception:
                     pass
 
-            # Fallback parent_pid from state if not passed in CLI
             if not parent_pid and state.get('parent_pid'):
                 parent_pid = state.get('parent_pid')
 
-            # Render frame
             node_name = state.get('node_name', 'Worker')
             master_connected = state.get('master_connected', False)
             uptime_str = format_uptime(state.get('uptime_seconds', 0))
+            
             if psutil:
                 try:
                     cpu_pct = psutil.cpu_percent(interval=None)
@@ -150,71 +183,100 @@ def main():
             status_badge = f"{GREEN}ONLINE 🟢{RESET}" if master_connected else f"{RED}CONNECTING... 🔴{RESET}"
             ram_str = f"{WHITE}{ram_used/1024:.1f} GB{RESET} / {DIM}{ram_tot/1024:.1f} GB{RESET}" if ram_tot > 0 else f"{WHITE}{ram_used:.0f} MB{RESET}"
             
-            clear_screen()
-            
             total_farming = sum(g.get('active_count', 0) for g in games.values())
             total_waiting = sum(g.get('waiting_count', 0) for g in games.values())
             
+            # Dynamic Header Construction
+            inner_w = cols - 4
+            title = "⚡ TDC WORKER — LIVE MONITOR DASHBOARD ⚡"
+            if len(title) > inner_w:
+                title = "⚡ TDC MONITOR ⚡"
+            
+            t_pad_left = (inner_w - len(title)) // 2
+            t_pad_right = inner_w - len(title) - t_pad_left
+            
             lines = [
-                f"{CYAN}╔════════════════════════════════════════════════════════════════════════════════╗{RESET}",
-                f"{CYAN}║{BOLD}{WHITE}                   ⚡ TDC WORKER — LIVE MONITOR DASHBOARD ⚡                    {RESET}{CYAN}║{RESET}",
-                f"{CYAN}╚════════════════════════════════════════════════════════════════════════════════╝{RESET}",
-                f" {BOLD}Node:{RESET} {WHITE}{node_name}{RESET} ({status_badge})    {BOLD}PID:{RESET} {DIM}{farmer_pid}{RESET}    {BOLD}Uptime:{RESET} {WHITE}{uptime_str}{RESET}    {BOLD}Time:{RESET} {DIM}{time.strftime('%H:%M:%S')}{RESET}",
-                f" {BOLD}CPU:{RESET}  {render_cpu_bar(cpu_pct)}    {BOLD}RAM:{RESET} {ram_str}",
-                f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}",
-                f" {BOLD}👥 ACTIVE ACCOUNTS:{RESET} {GREEN}{BOLD}{total_farming}{RESET} {GREEN}Farming 🟢{RESET}  |  {YELLOW}{BOLD}{total_waiting}{RESET} {YELLOW}Seeking Streamer{RESET}  {DIM}(Total: {total_acc}){RESET}",
-                f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}",
-                f" {BOLD}🎮 GAMES BREAKDOWN:{RESET}"
+                f" {CYAN}╔{'═' * (inner_w + 2)}╗{RESET}",
+                f" {CYAN}║ {' ' * t_pad_left}{BOLD}{WHITE}{title}{RESET}{CYAN}{' ' * t_pad_right} ║{RESET}",
+                f" {CYAN}╚{'═' * (inner_w + 2)}╝{RESET}",
+                f"  {BOLD}Node:{RESET} {WHITE}{node_name}{RESET} ({status_badge})    {BOLD}PID:{RESET} {DIM}{farmer_pid}{RESET}    {BOLD}Uptime:{RESET} {WHITE}{uptime_str}{RESET}    {BOLD}Time:{RESET} {DIM}{time.strftime('%H:%M:%S')}{RESET}",
+                f"  {BOLD}CPU:{RESET}  {render_cpu_bar(cpu_pct, width=max(8, min(20, cols // 10)))}    {BOLD}RAM:{RESET} {ram_str}",
+                f" {CYAN}{'─' * (inner_w + 2)}{RESET}",
+                f"  {BOLD}👥 ACTIVE ACCOUNTS:{RESET} {GREEN}{BOLD}{total_farming}{RESET} {GREEN}Farming 🟢{RESET}  |  {YELLOW}{BOLD}{total_waiting}{RESET} {YELLOW}Seeking Streamer{RESET}  {DIM}(Total: {total_acc}){RESET}",
+                f" {CYAN}{'─' * (inner_w + 2)}{RESET}",
+                f"  {BOLD}🎮 GAMES BREAKDOWN:{RESET}"
             ]
 
+            # Dynamic Responsive Table Layout
             if games:
-                lines.append(f" ┌──────────────────────────┬────────────┬────────────────────────┬──────────────────┐")
-                lines.append(f" │ {BOLD}Game Name{RESET}                │ {BOLD}Accounts{RESET}   │ {BOLD}Live Streamers{RESET}         │ {BOLD}Time Left{RESET}        │")
-                lines.append(f" ├──────────────────────────┼────────────┼────────────────────────┼──────────────────┤")
+                # Calculate column widths to fill terminal width
+                # inner_w + 2 is total width available
+                # Table format: ' ┌─{w_game}─┬─{w_acc}─┬─{w_streamers}─┬─{w_time}─┐'
+                # Separator chars count = 13 (border + 4 * 2 spaces + 3 vertical bars)
+                avail_table_w = max(40, (inner_w + 2) - 13)
+                
+                w_acc = 10
+                rem_w = avail_table_w - w_acc
+                w_game = max(14, int(rem_w * 0.38))
+                w_streamers = max(14, int(rem_w * 0.34))
+                w_time = max(12, rem_w - w_game - w_streamers)
+
+                lines.append(f"  ┌─{'─'*w_game}─┬─{'─'*w_acc}─┬─{'─'*w_streamers}─┬─{'─'*w_time}─┐")
+                lines.append(f"  │ {BOLD}{'Game Name':<{w_game}}{RESET} │ {BOLD}{'Accounts':<{w_acc}}{RESET} │ {BOLD}{'Live Streamers':<{w_streamers}}{RESET} │ {BOLD}{'Progress / Time':<{w_time}}{RESET} │")
+                lines.append(f"  ├─{'─'*w_game}─┼─{'─'*w_acc}─┼─{'─'*w_streamers}─┼─{'─'*w_time}─┤")
+
                 for g_name, g_info in games.items():
                     cnt = g_info.get('count', 0)
                     is_active = g_info.get('is_active', False)
                     st_list = ", ".join(g_info.get('streamers', []))
                     if not st_list:
                         st_list = "Seeking streamer..."
-                    if len(st_list) > 22:
-                        st_list = st_list[:19] + "..."
-                    
+                    st_list = truncate_visible(st_list, w_streamers)
+
                     min_w = g_info.get('min_watched', 0)
                     req_w = g_info.get('required_minutes', 60)
                     time_left_str = g_info.get('time_left', 'Searching...')
                     
                     if time_left_str == "Done":
                         left_cell = f"{GREEN}Done ({req_w}/{req_w}m){RESET}"
-                        raw_left_len = len(f"Done ({req_w}/{req_w}m)")
                     elif not is_active or time_left_str in ["Starts Soon", "Searching..."]:
                         left_cell = f"{YELLOW}Searching...{RESET}"
-                        raw_left_len = len("Searching...")
                     else:
                         left_cell = f"{CYAN}{time_left_str}{RESET} {DIM}({min_w}/{req_w}m){RESET}"
-                        raw_left_len = len(f"{time_left_str} ({min_w}/{req_w}m)")
 
-                    # Pad game name nicely
-                    display_g = g_name if len(g_name) <= 24 else g_name[:21] + "..."
-                    padding = " " * max(0, 16 - raw_left_len)
+                    display_g = truncate_visible(g_name, w_game)
+                    acc_cell = f"{YELLOW}{cnt:>3} acc{RESET}"
 
+                    g_pad = pad_visible(f"{WHITE}{display_g}{RESET}", w_game)
+                    a_pad = pad_visible(acc_cell, w_acc)
                     st_color = WHITE if is_active else YELLOW
-                    lines.append(f" │ {WHITE}{display_g:<24}{RESET} │ {YELLOW}{cnt:>4} acc{RESET}   │ {st_color}{st_list:<22}{RESET} │ {left_cell}{padding} │")
-                lines.append(f" └──────────────────────────┴────────────┴────────────────────────┴──────────────────┘")
+                    s_pad = pad_visible(f"{st_color}{st_list}{RESET}", w_streamers)
+                    t_pad = pad_visible(left_cell, w_time)
+
+                    lines.append(f"  │ {g_pad} │ {a_pad} │ {s_pad} │ {t_pad} │")
+
+                lines.append(f"  └─{'─'*w_game}─┴─{'─'*w_acc}─┴─{'─'*w_streamers}─┴─{'─'*w_time}─┘")
             else:
-                lines.append(f"   {DIM}No accounts currently assigned. Waiting for master server tasks...{RESET}")
+                lines.append(f"    {DIM}No accounts currently assigned. Waiting for master server tasks...{RESET}")
 
             lines.append("")
-            lines.append(f" {BOLD}📜 RECENT ACTIVITY:{RESET}")
+            lines.append(f"  {BOLD}📜 RECENT ACTIVITY:{RESET}")
+            
+            # Calculate remaining vertical rows for events dynamically
+            fixed_lines_count = len(lines) + 3  # footer lines
+            max_events = max(2, min(25, rows - fixed_lines_count))
+
             if recent_events:
-                for evt in recent_events[:5]:
-                    lines.append(f"  {CYAN}•{RESET} {DIM}{evt}{RESET}")
+                for evt in recent_events[:max_events]:
+                    truncated_evt = truncate_visible(evt, (inner_w + 2) - 6)
+                    lines.append(f"   {CYAN}•{RESET} {DIM}{truncated_evt}{RESET}")
             else:
-                lines.append(f"  {DIM}Waiting for telemetry stream from farmer process...{RESET}")
+                lines.append(f"   {DIM}Waiting for telemetry stream from farmer process...{RESET}")
 
-            lines.append(f"{CYAN}────────────────────────────────────────────────────────────────────────────────{RESET}")
-            lines.append(f" {DIM}Auto-refreshes live (1s) • Closes automatically when main worker exits{RESET}")
+            lines.append(f" {CYAN}{'─' * (inner_w + 2)}{RESET}")
+            lines.append(f"  {DIM}Auto-refreshes live (1s) • Auto-scales to window ({cols}x{rows}) • Closes with worker{RESET}")
 
+            clear_screen()
             sys.stdout.write("\n".join(lines) + "\n")
             sys.stdout.flush()
 
