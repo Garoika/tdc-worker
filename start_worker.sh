@@ -9,6 +9,14 @@ set -e
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
+# Auto-drop root/sudo privileges if accidentally launched with sudo
+if [ "$(id -u)" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+    echo "[INFO] Detected sudo. Switching to user $SUDO_USER to preserve display & venv permissions..."
+    chown -R "$SUDO_USER:$SUDO_USER" "$SCRIPT_DIR" 2>/dev/null || true
+    exec sudo -u "$SUDO_USER" bash "$0" "$@"
+    exit 0
+fi
+
 CONFIG_FILE=".worker_config.json"
 
 echo "=========================================="
