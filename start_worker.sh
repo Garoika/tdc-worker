@@ -1,7 +1,7 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # ===================================================
 # Twitch Drops Cluster (TDC) — Linux Worker Node Starter
-# Self-healing, auto-dependency installation & auto-update
+# Self-healing, native process execution & auto-update
 # ===================================================
 
 set -e
@@ -30,7 +30,7 @@ run_root() {
 }
 
 # 1. System Package Manager Detection & Dependency Installation
-echo "[1/5] Checking system packages (curl, git, python3, venv, pip)..."
+echo "[1/3] Checking system packages (curl, git, python3, venv, pip)..."
 
 MISSING_PKGS=()
 
@@ -90,7 +90,7 @@ fi
 
 # 2. Check & Auto-Update Worker Repo via Git
 echo ""
-echo "[2/5] Checking for updates from GitHub..."
+echo "[2/3] Checking for updates from GitHub..."
 if [ -d ".git" ] && command -v git &>/dev/null; then
     # Fix safe directory in case ownership differs
     git config --global --add safe.directory "$SCRIPT_DIR" 2>/dev/null || true
@@ -101,79 +101,9 @@ else
     echo "      [INFO] Not a git repository or git unavailable. Skipping auto-update."
 fi
 
-# 3. Docker Installation & Daemon Check
+# 3. Setup Python Virtual Environment & Dependencies
 echo ""
-echo "[3/5] Checking Docker & Docker daemon..."
-
-if ! command -v docker &>/dev/null; then
-    echo "      [INFO] Docker is not installed. Installing official Docker..."
-    if command -v curl &>/dev/null; then
-        curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-        run_root sh /tmp/get-docker.sh
-        rm -f /tmp/get-docker.sh
-    else
-        echo "[ERROR] curl is required to install Docker."
-        exit 1
-    fi
-fi
-
-# Ensure docker service is running
-if command -v systemctl &>/dev/null; then
-    if ! systemctl is-active --quiet docker 2>/dev/null; then
-        echo "      [INFO] Starting & enabling Docker service..."
-        run_root systemctl enable --now docker
-    fi
-elif command -v service &>/dev/null; then
-    run_root service docker start 2>/dev/null || true
-fi
-
-# Ensure current user is in docker group
-if [ "$(id -u)" -ne 0 ] && [ -n "$USER" ]; then
-    if ! groups "$USER" 2>/dev/null | grep -q '\bdocker\b'; then
-        echo "      [INFO] Adding user $USER to docker group..."
-        run_root usermod -aG docker "$USER" 2>/dev/null || true
-    fi
-fi
-
-# Fix socket permissions if needed for immediate execution
-if [ -e /var/run/docker.sock ]; then
-    if ! docker info &>/dev/null; then
-        run_root chmod 666 /var/run/docker.sock 2>/dev/null || true
-    fi
-fi
-
-if ! docker info &>/dev/null; then
-    echo "      [WARN] Could not connect to Docker daemon as $USER. Attempting socket fix..."
-    run_root chmod 666 /var/run/docker.sock 2>/dev/null || true
-fi
-
-if ! docker info &>/dev/null; then
-    echo "[ERROR] Docker is still not running or accessible. Please check 'sudo systemctl status docker'."
-    exit 1
-fi
-
-echo "      [OK] Docker is running and ready."
-
-# 4. Check & Pull/Build Farmer Docker Image
-echo ""
-echo "[4/5] Checking Farmer Docker Image (fools228/tdc-farmer:latest)..."
-if ! docker image inspect fools228/tdc-farmer:latest &>/dev/null; then
-    echo "      [INFO] Pulling fools228/tdc-farmer:latest from Docker Hub..."
-    if ! docker pull fools228/tdc-farmer:latest; then
-        echo "      [INFO] Docker Hub pull failed. Building local Docker image..."
-        cd farmer
-        docker build -t fools228/tdc-farmer:latest .
-        cd "$SCRIPT_DIR"
-    fi
-    echo "      [OK] Docker image ready!"
-else
-    echo "      [OK] Docker image fools228/tdc-farmer:latest is ready."
-fi
-docker tag fools228/tdc-farmer:latest tdc-farmer:latest 2>/dev/null || true
-
-# 5. Setup Python Virtual Environment & Dependencies
-echo ""
-echo "[5/5] Checking Python environment & Worker Agent..."
+echo "[3/3] Checking Python environment & Worker Agent..."
 
 VENV_DIR="$SCRIPT_DIR/worker/.venv"
 
@@ -221,13 +151,16 @@ if [ ! -f "$CONFIG_FILE" ]; then
         exit 1
     fi
 
-    read -p "Enter Worker Public/LAN IP (optional): " IP_INPUT
+    read -p "Enter Worker Public/LAN IP (optional, press Enter for auto): " IP_INPUT
+    read -p "Enter Runner Mode [process/docker] (default: process): " RUNNER_INPUT
+    RUNNER_INPUT="${RUNNER_INPUT:-process}"
     
     cat <<EOF > "$CONFIG_FILE"
 {
   "master_url": "$MASTER_INPUT",
   "worker_token": "$TOKEN_INPUT",
-  "worker_public_ip": "$IP_INPUT"
+  "worker_public_ip": "$IP_INPUT",
+  "runner_type": "$RUNNER_INPUT"
 }
 EOF
 fi
@@ -236,29 +169,53 @@ fi
 MASTER_URL=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('master_url', ''))" 2>/dev/null)
 WORKER_TOKEN=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('worker_token', ''))" 2>/dev/null)
 WORKER_PUBLIC_IP=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('worker_public_ip', ''))" 2>/dev/null)
+RUNNER_TYPE=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('runner_type', 'process'))" 2>/dev/null)
 
 MASTER_URL="${MASTER_URL:-ws://185.104.248.62/ws/workers}"
+RUNNER_TYPE="${RUNNER_TYPE:-process}"
 
 # Auto-fix port 8000 if master is behind nginx
 if [[ "$MASTER_URL" == *":8000/ws/workers"* ]]; then
     MASTER_URL="${MASTER_URL//:8000\/ws\/workers/\/ws\/workers}"
 fi
 
-echo "      [OK] Config loaded: $MASTER_URL"
+echo "      [OK] Config loaded: $MASTER_URL (Mode: ${RUNNER_TYPE^^})"
+
+# Optional Docker check ONLY if explicitly configured by user
+if [ "$RUNNER_TYPE" == "docker" ]; then
+    echo ""
+    echo "[Docker Check] Checking Docker daemon for Docker Runner Mode..."
+    if ! command -v docker &>/dev/null; then
+        echo "      [INFO] Docker runner requested but docker is not installed. Installing Docker..."
+        curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+        run_root sh /tmp/get-docker.sh
+        rm -f /tmp/get-docker.sh
+    fi
+    if command -v systemctl &>/dev/null; then
+        if ! systemctl is-active --quiet docker 2>/dev/null; then
+            run_root systemctl enable --now docker
+        fi
+    fi
+    if [ -e /var/run/docker.sock ]; then
+        if ! docker info &>/dev/null; then
+            run_root chmod 666 /var/run/docker.sock 2>/dev/null || true
+        fi
+    fi
+fi
 
 # Start Worker Agent
 echo ""
 echo "=========================================="
 echo " 🚀 Starting Twitch Drops Farm Worker Node"
 echo " Master WS: $MASTER_URL"
-echo " Image:     fools228/tdc-farmer:latest"
+echo " Runner:    ${RUNNER_TYPE^^}"
 echo "=========================================="
 echo ""
 
 export MASTER_URL="$MASTER_URL"
 export WORKER_TOKEN="$WORKER_TOKEN"
 export WORKER_PUBLIC_IP="$WORKER_PUBLIC_IP"
-export DOCKER_IMAGE="fools228/tdc-farmer:latest"
+export RUNNER_TYPE="$RUNNER_TYPE"
 export PYTHONUNBUFFERED=1
 
 cd "$SCRIPT_DIR/worker"

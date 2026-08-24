@@ -29,23 +29,29 @@ class ProcessManager:
         self._lock = asyncio.Lock()
 
     def ensure_farmer_image(self):
-        """Verify that TwitchDropsBot.Console.exe is present and executable, and kill orphan instances."""
+        """Verify that TwitchDropsBot binary or dll is present, and kill orphan instances."""
         logger.info(f"Checking Native Farmer Binary at: {self.exe_path}...")
-        if not self.exe_path.exists():
+        dll_path = self.bin_dir / 'TwitchDropsBot.Console.dll'
+        if not self.exe_path.exists() and not dll_path.exists():
             raise FileNotFoundError(
-                f"Farmer binary not found at {self.exe_path}! Please ensure farmer_bin is deployed."
+                f"Farmer binary not found at {self.exe_path} or {dll_path}! Please ensure farmer_bin is deployed."
             )
+        import os
+        if os.name != 'nt' and self.exe_path.exists():
+            try:
+                os.chmod(self.exe_path, 0o755)
+            except Exception:
+                pass
         # Kill any orphan TwitchDropsBot processes from previous runs
         self._terminate_process()
         try:
-            import os
             if os.name == 'nt':
                 subprocess.run(["taskkill", "/f", "/im", "TwitchDropsBot.Console.exe"], capture_output=True)
             else:
                 subprocess.run(["pkill", "-9", "-f", "TwitchDropsBot.Console"], capture_output=True)
         except Exception:
             pass
-        logger.info(f"Native Farmer Binary verified: {self.exe_path} (Process Mode Active)")
+        logger.info(f"Native Farmer Binary verified (Process Mode Active)")
 
     async def spawn_container(self, job_id: str, account: dict, target: dict, limits: dict) -> str:
         """Register a job/account and trigger single-process startup/reload."""
@@ -184,16 +190,26 @@ class ProcessManager:
         self._terminate_process()
         self._start_process()
 
+    def _get_launch_cmd(self) -> list:
+        import os, shutil
+        dll_path = self.bin_dir / 'TwitchDropsBot.Console.dll'
+        if os.name != 'nt' and shutil.which("dotnet") and dll_path.exists():
+            return ["dotnet", str(dll_path)]
+        if str(self.exe_path).endswith('.dll'):
+            return ["dotnet", str(self.exe_path)]
+        return [str(self.exe_path)]
+
     def _start_process(self):
-        """Spawn TwitchDropsBot.Console.exe and start stdout reader thread."""
+        """Spawn native farmer process and start stdout reader thread."""
         try:
             import os
             env = os.environ.copy()
             env['INSIDE_DOCKER'] = 'true'
 
-            logger.info(f"[ProcessManager] Launching native TwitchDropsBot process: {self.exe_path}")
+            cmd = self._get_launch_cmd()
+            logger.info(f"[ProcessManager] Launching native TwitchDropsBot: {' '.join(cmd)}")
             self.process = subprocess.Popen(
-                [str(self.exe_path)],
+                cmd,
                 cwd=str(self.bin_dir),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
