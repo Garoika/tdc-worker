@@ -33,7 +33,12 @@ def get_linux_terminal_cmd(base_cmd: list) -> list | None:
     if os.environ.get("TMUX") and shutil.which("tmux"):
         return ["tmux", "split-window", "-h"] + base_cmd
 
-    # 2. If GUI desktop session is active (X11 / Wayland)
+    # 2. Prevent X11/Wayland authorization errors when running as root without display authority
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        if not os.environ.get("XAUTHORITY") and not os.environ.get("SUDO_USER"):
+            return None
+
+    # 3. If GUI desktop session is active (X11 / Wayland)
     has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     if has_display:
         candidates = [
@@ -92,13 +97,18 @@ def launch_monitor():
         else:
             term_cmd = get_linux_terminal_cmd(base_cmd)
             if term_cmd:
-                monitor_proc = subprocess.Popen(term_cmd, env=env)
+                monitor_proc = subprocess.Popen(
+                    term_cmd,
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
                 atexit.register(cleanup_monitor)
                 logger.info(f"Launched companion Live Monitor in separate terminal ({term_cmd[0]}, PID: {monitor_proc.pid})")
             else:
                 logger.info("Headless / no desktop terminal detected. Live Monitor skipped (logs will stream cleanly here). Run 'python -m agent.monitor' in another session if needed.")
     except Exception as e:
-        logger.warning(f"Could not launch Live Monitor Console: {e}")
+        logger.debug(f"Could not launch Live Monitor Console: {e}")
 
 async def main():
     logger.info("Starting Twitch Drops Farm Worker Node")
