@@ -202,7 +202,7 @@ def main():
             games = state.get('games', {})
             recent_events = state.get('recent_events', [])
 
-            status_badge = f"{GREEN}ONLINE 🟢{RESET}" if master_connected else f"{RED}CONNECTING... 🔴{RESET}"
+            status_badge = f"{GREEN}[ONLINE ●]{RESET}" if master_connected else f"{RED}[CONNECTING ●]{RESET}"
             ram_str = f"{WHITE}{ram_used/1024:.1f} GB{RESET} / {DIM}{ram_tot/1024:.1f} GB{RESET}" if ram_tot > 0 else f"{WHITE}{ram_used:.0f} MB{RESET}"
             
             total_farming = sum(g.get('active_count', 0) for g in games.values())
@@ -225,9 +225,9 @@ def main():
                 f" {BOLD}Node:{RESET} {WHITE}{node_name}{RESET} ({status_badge})   {BOLD}PID:{RESET} {DIM}{farmer_pid}{RESET}   {BOLD}Uptime:{RESET} {WHITE}{uptime_str}{RESET}   {BOLD}Time:{RESET} {DIM}{time.strftime('%H:%M:%S')}{RESET}",
                 f" {BOLD}CPU:{RESET}  {render_cpu_bar(cpu_pct, width=max(6, min(16, cols // 10)))}   {BOLD}RAM:{RESET} {ram_str}",
                 f"{CYAN}{'─' * (inner_w + 4)}{RESET}",
-                f" {BOLD}👥 ACTIVE ACCOUNTS:{RESET} {GREEN}{BOLD}{total_farming}{RESET} {GREEN}Farming 🟢{RESET}  |  {YELLOW}{BOLD}{total_waiting}{RESET} {YELLOW}Seeking Streamer{RESET}  {DIM}(Total: {total_acc}){RESET}",
+                f" {CYAN}●{RESET} {BOLD}ACTIVE ACCOUNTS:{RESET} {GREEN}{BOLD}{total_farming}{RESET} {GREEN}Farming{RESET}  |  {YELLOW}{BOLD}{total_waiting}{RESET} {YELLOW}Seeking Streamer{RESET}  {DIM}(Total: {total_acc}){RESET}",
                 f"{CYAN}{'─' * (inner_w + 4)}{RESET}",
-                f" {BOLD}🎮 GAMES BREAKDOWN:{RESET}"
+                f" {CYAN}●{RESET} {BOLD}GAMES BREAKDOWN:{RESET}"
             ]
 
             # Dynamic Responsive Table Layout
@@ -280,7 +280,7 @@ def main():
                 lines.append(f"   {DIM}No accounts currently assigned. Waiting for master server tasks...{RESET}")
 
             lines.append("")
-            lines.append(f" {BOLD}📜 RECENT ACTIVITY:{RESET}")
+            lines.append(f" {CYAN}●{RESET} {BOLD}RECENT ACTIVITY:{RESET}")
             
             # Calculate remaining vertical rows for events dynamically
             fixed_lines_count = len(lines) + 3  # footer lines
@@ -289,7 +289,7 @@ def main():
             if recent_events:
                 for evt in recent_events[:max_events]:
                     truncated_evt = truncate_visible(evt, (inner_w + 4) - 4)
-                    lines.append(f"  {CYAN}•{RESET} {DIM}{truncated_evt}{RESET}")
+                    lines.append(f"  {CYAN}▸{RESET} {DIM}{truncated_evt}{RESET}")
             else:
                 lines.append(f"  {DIM}Waiting for telemetry stream from farmer process...{RESET}")
 
