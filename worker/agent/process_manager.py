@@ -48,6 +48,47 @@ class ProcessManager:
                 return p
         return None
 
+    @classmethod
+    def _auto_install_dotnet(cls):
+        """Automatically install .NET runtime on Linux via pacman, apt, or Microsoft user-level script."""
+        import shutil, subprocess, os
+        logger.info("[ProcessManager] Attempting automatic .NET Runtime installation...")
+        
+        # 1. Try pacman (Arch Linux / Manjaro)
+        if shutil.which("pacman"):
+            try:
+                cmd = ["sudo", "pacman", "-Sy", "--noconfirm", "dotnet-runtime"]
+                if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
+                    cmd = ["pacman", "-Sy", "--noconfirm", "dotnet-runtime"]
+                subprocess.run(cmd, check=True)
+                logger.info("[ProcessManager] Successfully installed dotnet-runtime via pacman!")
+                return
+            except Exception as e:
+                logger.debug(f"[ProcessManager] pacman dotnet install attempt: {e}")
+
+        # 2. Try apt-get (Debian / Ubuntu)
+        if shutil.which("apt-get"):
+            try:
+                cmd = ["sudo", "apt-get", "install", "-y", "dotnet-runtime-8.0"]
+                if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
+                    cmd = ["apt-get", "install", "-y", "dotnet-runtime-8.0"]
+                subprocess.run(cmd, check=True)
+                logger.info("[ProcessManager] Successfully installed dotnet-runtime via apt-get!")
+                return
+            except Exception as e:
+                logger.debug(f"[ProcessManager] apt-get dotnet install attempt: {e}")
+
+        # 3. Universal user-level fallback via Microsoft official installer (no root password needed)
+        try:
+            home_dotnet = os.path.expanduser("~/.dotnet")
+            install_cmd = f'curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --runtime dotnet --channel 8.0 --install-dir "{home_dotnet}"'
+            subprocess.run(install_cmd, shell=True, check=True)
+            os.environ["PATH"] = f"{home_dotnet}:{os.environ.get('PATH', '')}"
+            os.environ["DOTNET_ROOT"] = home_dotnet
+            logger.info(f"[ProcessManager] Successfully installed user-level .NET 8.0 into {home_dotnet}!")
+        except Exception as e:
+            logger.error(f"[ProcessManager] Failed to auto-install .NET runtime: {e}")
+
     def ensure_farmer_image(self):
         """Verify that TwitchDropsBot binary or dll is present, and kill orphan instances."""
         dll_path = self.bin_dir / 'TwitchDropsBot.Console.dll'
@@ -57,6 +98,11 @@ class ProcessManager:
         import os
         if os.name != 'nt':
             dotnet_bin = self._find_dotnet_binary()
+            if not dotnet_bin and not (linux_bin.exists() and not linux_bin.name.endswith('.exe')):
+                logger.warning("[ProcessManager] .NET runtime (dotnet) not found! Starting automatic installation...")
+                self._auto_install_dotnet()
+                dotnet_bin = self._find_dotnet_binary()
+
             logger.info(f"Checking Native Farmer Binary on Linux (dotnet: {dotnet_bin or 'system PATH'})...")
             if not dll_path.exists() and not exe_path.exists() and not linux_bin.exists():
                 raise FileNotFoundError(
