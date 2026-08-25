@@ -210,6 +210,13 @@ class ProcessManager:
 
         # Build unified config.json
         favourite_games = list({j['game'] for j in jobs_snapshot if j.get('game')})
+        priority_channels = []
+        for j in jobs_snapshot:
+            t = j.get('target') or {}
+            for s in t.get('priority_streamers') or []:
+                if s and str(s).strip() and str(s).strip() not in priority_channels:
+                    priority_channels.append(str(s).strip())
+
         twitch_users = []
 
         for j in jobs_snapshot:
@@ -243,7 +250,8 @@ class ProcessManager:
                 "ClaimBadges": True,
                 "AutoReloadLiveStreamers": True,
                 "AutoReloadInactiveStreamers": True,
-                "PriorityStreamers": [],
+                "PriorityChannels": priority_channels,
+                "PriorityStreamers": priority_channels,
                 "BlacklistedStreamers": [],
                 "StreamerSelectionStrategy": "LowestViewers",
                 "LiveStreamerCacheExpiration": 15,
