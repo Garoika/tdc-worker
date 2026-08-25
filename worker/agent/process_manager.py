@@ -234,10 +234,15 @@ class ProcessManager:
 
     def _read_process_output(self, proc: subprocess.Popen):
         try:
-            for line in iter(proc.stdout.readline, ''):
-                clean_line = line.rstrip()
-                if clean_line:
-                    self.log_buffer.append(clean_line)
+            live_log_path = self.bin_dir / "logs" / "live_process.log"
+            live_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(live_log_path, "a", encoding="utf-8", errors="replace") as f_live:
+                for line in iter(proc.stdout.readline, ''):
+                    clean_line = line.rstrip()
+                    if clean_line:
+                        self.log_buffer.append(clean_line)
+                        f_live.write(clean_line + "\n")
+                        f_live.flush()
             proc.stdout.close()
         except Exception as e:
             logger.debug(f"[ProcessManager] Output reader terminated: {e}")
@@ -341,9 +346,16 @@ class ProcessManager:
         if target_login:
             tag = f"[TwitchUser - {target_login}]"
             user_lines = [line for line in lines if tag in line]
+            if user_lines:
+                if tail > 0:
+                    user_lines = user_lines[-tail:]
+                return "\n".join(user_lines)
+            
+            # If no account-specific lines found yet (e.g. searching streamer, checking campaigns),
+            # return the engine's general process lines so user sees what is happening
             if tail > 0:
-                user_lines = user_lines[-tail:]
-            return "\n".join(user_lines)
+                lines = lines[-tail:]
+            return "\n".join(lines)
 
         # Global logs fallback if no specific account requested
         if tail > 0:
