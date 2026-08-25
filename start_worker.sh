@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # ===================================================
 # Twitch Drops Cluster (TDC) — Linux Worker Node Starter
 # Self-healing, native process execution & auto-update
