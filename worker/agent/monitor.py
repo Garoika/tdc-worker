@@ -211,9 +211,9 @@ def main():
             # Dynamic Header Construction with safety margin
             box_w = cols
             inner_w = max(20, box_w - 4)
-            title = "⚡ TDC WORKER — LIVE MONITOR DASHBOARD ⚡"
+            title = "TDC WORKER — LIVE MONITOR DASHBOARD"
             if visible_len(title) > inner_w:
-                title = "⚡ TDC MONITOR ⚡"
+                title = "TDC MONITOR"
             
             t_pad_left = max(0, (inner_w - visible_len(title)) // 2)
             t_pad_right = max(0, inner_w - visible_len(title) - t_pad_left)
