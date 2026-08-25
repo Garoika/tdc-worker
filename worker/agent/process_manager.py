@@ -234,15 +234,10 @@ class ProcessManager:
 
     def _read_process_output(self, proc: subprocess.Popen):
         try:
-            live_log_path = self.bin_dir / "logs" / "live_process.log"
-            live_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(live_log_path, "a", encoding="utf-8", errors="replace") as f_live:
-                for line in iter(proc.stdout.readline, ''):
-                    clean_line = line.rstrip()
-                    if clean_line:
-                        self.log_buffer.append(clean_line)
-                        f_live.write(clean_line + "\n")
-                        f_live.flush()
+            for line in iter(proc.stdout.readline, ''):
+                clean_line = line.rstrip()
+                if clean_line:
+                    self.log_buffer.append(clean_line)
             proc.stdout.close()
         except Exception as e:
             logger.debug(f"[ProcessManager] Output reader terminated: {e}")
@@ -346,52 +341,14 @@ class ProcessManager:
         if target_login:
             tag = f"[TwitchUser - {target_login}]"
             user_lines = [line for line in lines if tag in line]
-            if user_lines:
-                if tail > 0:
-                    user_lines = user_lines[-tail:]
-                return "\n".join(user_lines)
-            
-            # Fallback 1: Read user log file from disk if present
-            user_log_file = self.bin_dir / "logs" / f"logs-TwitchUser-{target_login}.log"
-            if user_log_file.exists():
-                try:
-                    with open(user_log_file, "r", encoding="utf-8", errors="replace") as f_u:
-                        disk_lines = [l.rstrip() for l in f_u.readlines() if l.strip()]
-                    if disk_lines:
-                        if tail > 0:
-                            disk_lines = disk_lines[-tail:]
-                        return "\n".join(disk_lines)
-                except Exception:
-                    pass
-
-            # Fallback 2: Return general in-memory process lines
-            if lines:
-                if tail > 0:
-                    lines = lines[-tail:]
-                return "\n".join(lines)
-
-            # Fallback 3: Read system-logs.txt or live_process.log from disk
-            for fallback_file in [self.bin_dir / "logs" / "live_process.log", self.bin_dir / "logs" / "system-logs.txt"]:
-                if fallback_file.exists():
-                    try:
-                        with open(fallback_file, "r", encoding="utf-8", errors="replace") as f_sys:
-                            sys_lines = [l.rstrip() for l in f_sys.readlines() if l.strip()]
-                        if sys_lines:
-                            if tail > 0:
-                                sys_lines = sys_lines[-tail:]
-                            return "\n".join(sys_lines)
-                    except Exception:
-                        pass
-
-            return f"[INFO] Account '{target_login}' is registered. Waiting for next stream cycle or campaign start."
-
-        # Global logs fallback if no specific account requested
-        if lines:
             if tail > 0:
-                lines = lines[-tail:]
-            return "\n".join(lines)
-            
-        return "[INFO] Farmer process is ready. No output logged yet."
+                user_lines = user_lines[-tail:]
+            return "\n".join(user_lines)
+
+        # Global logs fallback if no specific account requested (used by Full Worker Logs modal)
+        if tail > 0:
+            lines = lines[-tail:]
+        return "\n".join(lines)
 
     async def run_auth_container(self, acc: dict, temp_dir: str):
         """Run standalone auth process for Twitch Device Code authorization."""
