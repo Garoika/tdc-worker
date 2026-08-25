@@ -226,12 +226,14 @@ class ProcessManager:
                 "ClientSecret": client_secret,
                 "Id": twitch_user_id,
                 "Login": login,
-                "FavouriteGames": [game]
+                "FavouriteGames": [game] if game else [],
+                "OnlyFavouriteGames": True
             })
 
         config_data = {
             "FavouriteGames": favourite_games,
             "TwitchSettings": {
+                "OnlyFavouriteGames": True,
                 "TwitchUsers": twitch_users,
                 "GpuMode": "None",
                 "AppDirectory": "",
