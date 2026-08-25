@@ -246,9 +246,12 @@ class WebSocketClient:
 
 
     def auto_detect_ip(self) -> str:
-        from agent.config import WORKER_PUBLIC_IP
-        if WORKER_PUBLIC_IP:
-            return WORKER_PUBLIC_IP
+        try:
+            from agent.config import WORKER_PUBLIC_IP
+            if WORKER_PUBLIC_IP:
+                return WORKER_PUBLIC_IP
+        except Exception:
+            pass
             
         try:
             import urllib.request

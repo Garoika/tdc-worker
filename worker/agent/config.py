@@ -70,6 +70,7 @@ MASTER_URL = os.environ.get('MASTER_URL') or file_config.get('master_url') or 'w
 if ":8000/ws/workers" in MASTER_URL:
     MASTER_URL = MASTER_URL.replace(":8000/ws/workers", "/ws/workers")
 WORKER_TOKEN = os.environ.get('WORKER_TOKEN') or file_config.get('worker_token') or ''
+WORKER_PUBLIC_IP = os.environ.get('WORKER_PUBLIC_IP') or file_config.get('worker_public_ip') or ''
 RUNNER_TYPE = (os.environ.get('RUNNER_TYPE') or file_config.get('runner_type') or 'process').lower()
 DOCKER_IMAGE = os.environ.get('DOCKER_IMAGE') or file_config.get('docker_image') or 'fools228/tdc-farmer:latest'
 MAX_CONTAINERS = int(os.environ.get('MAX_CONTAINERS', '100'))
