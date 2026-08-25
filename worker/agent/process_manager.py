@@ -87,12 +87,14 @@ class ProcessManager:
 
         async with self._lock:
             self.active_jobs[job_id] = {
+                'job_id': job_id,
                 'account': account,
                 'target': target,
                 'limits': limits,
                 'login': login,
                 'game': target.get('game', '')
             }
+            state_manager.update_jobs(self.active_jobs)
 
         # Apply state with debounced restart
         self._schedule_debounced_restart(delay=1.5)
@@ -119,6 +121,7 @@ class ProcessManager:
             if target_jid and target_jid in self.active_jobs:
                 login = self.active_jobs[target_jid]['login']
                 del self.active_jobs[target_jid]
+                state_manager.update_jobs(self.active_jobs)
                 logger.info(f"[ProcessManager] Removed account {login} (job {target_jid[:8]}). Remaining: {len(self.active_jobs)}")
                 self._schedule_debounced_restart(delay=1.5)
                 return True
@@ -130,6 +133,7 @@ class ProcessManager:
         """Stop all running jobs and kill the process."""
         async with self._lock:
             self.active_jobs.clear()
+            state_manager.update_jobs(self.active_jobs)
         if self._restart_task and not self._restart_task.done():
             self._restart_task.cancel()
         self._terminate_process()
@@ -315,15 +319,15 @@ class ProcessManager:
 
         res = []
         for j in jobs_snapshot:
-            job_id = j['job_id']
-            login = j['login']
-            game = j['game']
-            acc_id = str(j['account'].get('id', ''))
-            cid = f"proc_{job_id[:8]}"
+            job_id = j.get('job_id') or ''
+            login = j.get('login', '')
+            game = j.get('game', '')
+            acc_id = str(j.get('account', {}).get('id', ''))
+            cid = f"proc_{job_id[:8]}" if job_id else f"proc_{login}"
 
             res.append({
                 'container_id': cid,
-                'name': f'tdc-farm-{job_id[:8]}',
+                'name': f'tdc-farm-{job_id[:8]}' if job_id else f'tdc-farm-{login}',
                 'status': 'running' if is_running else 'stopped',
                 'login': login,
                 'game': game,
