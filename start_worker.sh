@@ -96,6 +96,24 @@ else
     echo "      [OK] System packages (curl, git, python3, venv, pip) are ready."
 fi
 
+# Check for .NET runtime (dotnet) on Linux for Process Mode
+if ! command -v dotnet &>/dev/null && [ ! -f "$HOME/.dotnet/dotnet" ] && [ ! -f "/usr/bin/dotnet" ] && [ ! -f "/snap/bin/dotnet" ]; then
+    echo ""
+    echo "      [INFO] .NET Runtime not found. Installing .NET 8.0 Runtime via Microsoft installer..."
+    if command -v apt-get &>/dev/null; then
+        run_root apt-get update -qq && run_root apt-get install -y dotnet-runtime-8.0 2>/dev/null || true
+    fi
+    if ! command -v dotnet &>/dev/null && [ ! -f "$HOME/.dotnet/dotnet" ]; then
+        echo "      [INFO] Installing user-level .NET 8.0 into ~/.dotnet..."
+        curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --runtime dotnet --channel 8.0 --install-dir "$HOME/.dotnet" || true
+    fi
+fi
+
+if [ -d "$HOME/.dotnet" ]; then
+    export DOTNET_ROOT="$HOME/.dotnet"
+    export PATH="$HOME/.dotnet:$PATH"
+fi
+
 # 2. Check & Auto-Update Worker Repo via Git
 echo ""
 echo "[2/3] Checking for updates from GitHub..."

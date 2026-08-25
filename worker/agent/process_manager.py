@@ -28,20 +28,47 @@ class ProcessManager:
         self._restart_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
 
+    @staticmethod
+    def _find_dotnet_binary() -> Optional[str]:
+        import shutil, os
+        dotnet_cmd = shutil.which("dotnet")
+        if dotnet_cmd:
+            return dotnet_cmd
+        candidate_paths = [
+            "/usr/bin/dotnet",
+            "/usr/local/bin/dotnet",
+            "/snap/bin/dotnet",
+            "/opt/dotnet/dotnet",
+            os.path.expanduser("~/.dotnet/dotnet"),
+            "/usr/share/dotnet/dotnet",
+            "/var/lib/snapd/snap/bin/dotnet"
+        ]
+        for p in candidate_paths:
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+        return None
+
     def ensure_farmer_image(self):
         """Verify that TwitchDropsBot binary or dll is present, and kill orphan instances."""
-        logger.info(f"Checking Native Farmer Binary at: {self.exe_path}...")
         dll_path = self.bin_dir / 'TwitchDropsBot.Console.dll'
-        if not self.exe_path.exists() and not dll_path.exists():
-            raise FileNotFoundError(
-                f"Farmer binary not found at {self.exe_path} or {dll_path}! Please ensure farmer_bin is deployed."
-            )
+        exe_path = self.bin_dir / 'TwitchDropsBot.Console.exe'
+        linux_bin = self.bin_dir / 'TwitchDropsBot.Console'
+
         import os
-        if os.name != 'nt' and self.exe_path.exists():
-            try:
-                os.chmod(self.exe_path, 0o755)
-            except Exception:
-                pass
+        if os.name != 'nt':
+            dotnet_bin = self._find_dotnet_binary()
+            logger.info(f"Checking Native Farmer Binary on Linux (dotnet: {dotnet_bin or 'system PATH'})...")
+            if not dll_path.exists() and not exe_path.exists() and not linux_bin.exists():
+                raise FileNotFoundError(
+                    f"Farmer binary/dll not found at {self.bin_dir}! Please ensure farmer_bin is deployed."
+                )
+        else:
+            logger.info(f"Checking Native Farmer Binary at: {self.exe_path}...")
+            if not self.exe_path.exists() and not dll_path.exists():
+                raise FileNotFoundError(
+                    f"Farmer binary not found at {self.exe_path} or {dll_path}! Please ensure farmer_bin is deployed."
+                )
+
         # Kill any orphan TwitchDropsBot processes from previous runs
         self._terminate_process()
         try:
@@ -51,7 +78,7 @@ class ProcessManager:
                 subprocess.run(["pkill", "-9", "-f", "TwitchDropsBot.Console"], capture_output=True)
         except Exception:
             pass
-        logger.info(f"Native Farmer Binary verified (Process Mode Active)")
+        logger.info("Native Farmer Binary verified (Process Mode Active)")
 
     async def spawn_container(self, job_id: str, account: dict, target: dict, limits: dict) -> str:
         """Register a job/account and trigger single-process startup/reload."""
@@ -63,38 +90,37 @@ class ProcessManager:
                 'account': account,
                 'target': target,
                 'limits': limits,
-                'job_id': job_id,
                 'login': login,
-                'game': target.get('game', 'Grand Theft Auto V')
+                'game': target.get('game', '')
             }
-            state_manager.update_jobs(self.active_jobs)
 
-        # Debounce restart: if multiple jobs arrive in a batch (e.g. 85 at once),
-        # restart the process only once after the batch settles (1.5 seconds delay).
+        # Apply state with debounced restart
         self._schedule_debounced_restart(delay=1.5)
+        return f"proc_{job_id[:8]}"
 
-        cid = f"proc_{job_id[:8]}"
-        return cid
-
-    async def stop_container(self, container_id: str, job_id: str = None) -> bool:
-        """Remove a job/account and reload or stop the unified process."""
-        target_job_id = None
+    async def stop_container(self, container_id: str = None, job_id: str = None) -> bool:
+        """Unregister a job/account and trigger single-process reload."""
         async with self._lock:
+            target_jid = None
             if job_id and job_id in self.active_jobs:
-                target_job_id = job_id
-            elif container_id:
-                clean_cid = container_id.replace("proc_", "")
-                for jid in list(self.active_jobs.keys()):
-                    if jid[:8] == clean_cid or jid == container_id:
-                        target_job_id = jid
+                target_jid = job_id
+            elif container_id and container_id.startswith("proc_"):
+                clean_jid = container_id.replace("proc_", "")
+                for jid in self.active_jobs:
+                    if jid.startswith(clean_jid) or jid == container_id:
+                        target_jid = jid
+                        break
+            elif job_id:
+                for jid in self.active_jobs:
+                    if jid.startswith(job_id[:8]) or jid == job_id:
+                        target_jid = jid
                         break
 
-            if target_job_id:
-                login = self.active_jobs[target_job_id]['login']
-                logger.info(f"[ProcessManager] Stopping job {target_job_id[:8]} (account: {login})")
-                del self.active_jobs[target_job_id]
-                state_manager.update_jobs(self.active_jobs)
-                self._schedule_debounced_restart(delay=1.0)
+            if target_jid and target_jid in self.active_jobs:
+                login = self.active_jobs[target_jid]['login']
+                del self.active_jobs[target_jid]
+                logger.info(f"[ProcessManager] Removed account {login} (job {target_jid[:8]}). Remaining: {len(self.active_jobs)}")
+                self._schedule_debounced_restart(delay=1.5)
                 return True
             else:
                 logger.debug(f"[ProcessManager] stop_container: job not found for cid={container_id}, jid={job_id}")
@@ -143,7 +169,6 @@ class ProcessManager:
             client_secret = acc.get('client_secret', '')
             twitch_user_id = acc.get('twitch_user_id', '')
             game = j['game']
-            priority_streamers = j.get('target', {}).get('priority_streamers', [])
 
             twitch_users.append({
                 "Enabled": True,
@@ -158,30 +183,36 @@ class ProcessManager:
             "FavouriteGames": favourite_games,
             "TwitchSettings": {
                 "TwitchUsers": twitch_users,
-                "AvoidCampaign": [],
-                "OnlyFavouriteGames": True,
-                "ForceTryWithTags": True,
-                "OnlyConnectedAccounts": False,
-                "PriorityChannels": [],
-                "WatchManager": "WatchRequest"
-            },
-            "LaunchOnStartup": False,
-            "LogLevel": 0,
-            "WebhookURL": "",
-            "WaitingSeconds": 120,
-            "AttemptToWatch": 3,
-            "WatchBrowserHeadless": True,
-            "MinimizeInTray": False
+                "GpuMode": "None",
+                "AppDirectory": "",
+                "StreamQuality": "None",
+                "ClaimDrops": True,
+                "ClaimMoments": False,
+                "ClaimBadges": True,
+                "AutoReloadLiveStreamers": True,
+                "AutoReloadInactiveStreamers": True,
+                "PriorityStreamers": [],
+                "BlacklistedStreamers": [],
+                "StreamerSelectionStrategy": "LowestViewers",
+                "LiveStreamerCacheExpiration": 15,
+                "InactiveStreamerCacheExpiration": 60,
+                "PeriodicChannelPointsClaim": False,
+                "WatchPreferences": {
+                    "Reruns": False,
+                    "Drops": True,
+                    "NonDrops": False
+                }
+            }
         }
 
-        config_dir = self.bin_dir / "Configuration"
+        config_dir = self.bin_dir / 'Configuration'
         config_dir.mkdir(parents=True, exist_ok=True)
-        config_file = config_dir / "config.json"
+        config_path = config_dir / 'config.json'
 
         try:
-            with open(config_file, 'w', encoding='utf-8') as f:
+            with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=2)
-            logger.info(f"[ProcessManager] Saved unified config with {len(twitch_users)} account(s) to {config_file}")
+            logger.info(f"[ProcessManager] Saved unified config with {len(twitch_users)} account(s) to {config_path}")
         except Exception as e:
             logger.error(f"[ProcessManager] Failed to write config.json: {e}")
             return
@@ -191,12 +222,30 @@ class ProcessManager:
         self._start_process()
 
     def _get_launch_cmd(self) -> list:
-        import os, shutil
+        import os
         dll_path = self.bin_dir / 'TwitchDropsBot.Console.dll'
-        if os.name != 'nt' and shutil.which("dotnet") and dll_path.exists():
-            return ["dotnet", str(dll_path)]
-        if str(self.exe_path).endswith('.dll'):
-            return ["dotnet", str(self.exe_path)]
+        exe_path = self.bin_dir / 'TwitchDropsBot.Console.exe'
+        linux_bin = self.bin_dir / 'TwitchDropsBot.Console'
+
+        # On Linux / macOS:
+        if os.name != 'nt':
+            if linux_bin.exists() and not linux_bin.name.endswith('.exe'):
+                try:
+                    os.chmod(linux_bin, 0o755)
+                    return [str(linux_bin)]
+                except Exception:
+                    pass
+
+            dotnet_path = self._find_dotnet_binary() or "dotnet"
+            target_file = dll_path if dll_path.exists() else exe_path
+            return [dotnet_path, str(target_file)]
+
+        # On Windows (nt):
+        if exe_path.exists():
+            return [str(exe_path)]
+        if dll_path.exists():
+            dotnet_path = self._find_dotnet_binary() or "dotnet"
+            return [dotnet_path, str(dll_path)]
         return [str(self.exe_path)]
 
     def _start_process(self):
