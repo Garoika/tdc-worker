@@ -351,16 +351,47 @@ class ProcessManager:
                     user_lines = user_lines[-tail:]
                 return "\n".join(user_lines)
             
-            # If no account-specific lines found yet (e.g. searching streamer, checking campaigns),
-            # return the engine's general process lines so user sees what is happening
+            # Fallback 1: Read user log file from disk if present
+            user_log_file = self.bin_dir / "logs" / f"logs-TwitchUser-{target_login}.log"
+            if user_log_file.exists():
+                try:
+                    with open(user_log_file, "r", encoding="utf-8", errors="replace") as f_u:
+                        disk_lines = [l.rstrip() for l in f_u.readlines() if l.strip()]
+                    if disk_lines:
+                        if tail > 0:
+                            disk_lines = disk_lines[-tail:]
+                        return "\n".join(disk_lines)
+                except Exception:
+                    pass
+
+            # Fallback 2: Return general in-memory process lines
+            if lines:
+                if tail > 0:
+                    lines = lines[-tail:]
+                return "\n".join(lines)
+
+            # Fallback 3: Read system-logs.txt or live_process.log from disk
+            for fallback_file in [self.bin_dir / "logs" / "live_process.log", self.bin_dir / "logs" / "system-logs.txt"]:
+                if fallback_file.exists():
+                    try:
+                        with open(fallback_file, "r", encoding="utf-8", errors="replace") as f_sys:
+                            sys_lines = [l.rstrip() for l in f_sys.readlines() if l.strip()]
+                        if sys_lines:
+                            if tail > 0:
+                                sys_lines = sys_lines[-tail:]
+                            return "\n".join(sys_lines)
+                    except Exception:
+                        pass
+
+            return f"[INFO] Account '{target_login}' is registered. Waiting for next stream cycle or campaign start."
+
+        # Global logs fallback if no specific account requested
+        if lines:
             if tail > 0:
                 lines = lines[-tail:]
             return "\n".join(lines)
-
-        # Global logs fallback if no specific account requested
-        if tail > 0:
-            lines = lines[-tail:]
-        return "\n".join(lines)
+            
+        return "[INFO] Farmer process is ready. No output logged yet."
 
     async def run_auth_container(self, acc: dict, temp_dir: str):
         """Run standalone auth process for Twitch Device Code authorization."""
