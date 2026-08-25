@@ -35,11 +35,24 @@ MAGENTA = "\033[35m"
 RED = "\033[31m"
 WHITE = "\033[37m"
 
+import unicodedata
+
 ANSI_REGEX = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
 
+def char_width(c: str) -> int:
+    """Returns terminal column width of a single character (2 for wide emojis)."""
+    # Quick check for zero-width / control characters
+    if unicodedata.category(c) in ('Mn', 'Me', 'Cc', 'Cf'):
+        return 0
+    # East Asian Wide (W) and Fullwidth (F) emojis/chars take 2 cells
+    if unicodedata.east_asian_width(c) in ('W', 'F'):
+        return 2
+    return 1
+
 def visible_len(s: str) -> int:
-    """Calculates visible character length of a string ignoring ANSI color codes."""
-    return len(ANSI_REGEX.sub('', s))
+    """Calculates visible character length of a string ignoring ANSI color codes and handling wide emojis."""
+    clean = ANSI_REGEX.sub('', s)
+    return sum(char_width(c) for c in clean)
 
 def pad_visible(s: str, width: int, align: str = '<') -> str:
     """Pads string to width based on its visible length."""
@@ -55,10 +68,19 @@ def pad_visible(s: str, width: int, align: str = '<') -> str:
     return s + pad
 
 def truncate_visible(s: str, max_width: int) -> str:
-    """Truncates raw string to max_width cleanly."""
-    if len(s) <= max_width:
+    """Truncates string to max_width taking into account wide emojis and colors."""
+    if visible_len(s) <= max_width:
         return s
-    return s[:max(0, max_width - 3)] + "..." if max_width >= 4 else s[:max_width]
+    target_w = max(1, max_width - 3) if max_width >= 4 else max_width
+    res = []
+    curr_w = 0
+    for c in s:
+        w = char_width(c)
+        if curr_w + w > target_w:
+            break
+        res.append(c)
+        curr_w += w
+    return "".join(res) + ("..." if max_width >= 4 else "")
 
 def enable_windows_ansi():
     """Enable VT100 / ANSI escape sequences in Windows Console."""
@@ -186,44 +208,42 @@ def main():
             total_farming = sum(g.get('active_count', 0) for g in games.values())
             total_waiting = sum(g.get('waiting_count', 0) for g in games.values())
             
-            # Dynamic Header Construction
-            inner_w = cols - 4
+            # Dynamic Header Construction with safety margin
+            box_w = cols
+            inner_w = max(20, box_w - 4)
             title = "⚡ TDC WORKER — LIVE MONITOR DASHBOARD ⚡"
-            if len(title) > inner_w:
+            if visible_len(title) > inner_w:
                 title = "⚡ TDC MONITOR ⚡"
             
-            t_pad_left = (inner_w - len(title)) // 2
-            t_pad_right = inner_w - len(title) - t_pad_left
+            t_pad_left = max(0, (inner_w - visible_len(title)) // 2)
+            t_pad_right = max(0, inner_w - visible_len(title) - t_pad_left)
             
             lines = [
-                f" {CYAN}╔{'═' * (inner_w + 2)}╗{RESET}",
-                f" {CYAN}║ {' ' * t_pad_left}{BOLD}{WHITE}{title}{RESET}{CYAN}{' ' * t_pad_right} ║{RESET}",
-                f" {CYAN}╚{'═' * (inner_w + 2)}╝{RESET}",
-                f"  {BOLD}Node:{RESET} {WHITE}{node_name}{RESET} ({status_badge})    {BOLD}PID:{RESET} {DIM}{farmer_pid}{RESET}    {BOLD}Uptime:{RESET} {WHITE}{uptime_str}{RESET}    {BOLD}Time:{RESET} {DIM}{time.strftime('%H:%M:%S')}{RESET}",
-                f"  {BOLD}CPU:{RESET}  {render_cpu_bar(cpu_pct, width=max(8, min(20, cols // 10)))}    {BOLD}RAM:{RESET} {ram_str}",
-                f" {CYAN}{'─' * (inner_w + 2)}{RESET}",
-                f"  {BOLD}👥 ACTIVE ACCOUNTS:{RESET} {GREEN}{BOLD}{total_farming}{RESET} {GREEN}Farming 🟢{RESET}  |  {YELLOW}{BOLD}{total_waiting}{RESET} {YELLOW}Seeking Streamer{RESET}  {DIM}(Total: {total_acc}){RESET}",
-                f" {CYAN}{'─' * (inner_w + 2)}{RESET}",
-                f"  {BOLD}🎮 GAMES BREAKDOWN:{RESET}"
+                f"{CYAN}╔{'═' * (inner_w + 2)}╗{RESET}",
+                f"{CYAN}║ {' ' * t_pad_left}{BOLD}{WHITE}{title}{RESET}{CYAN}{' ' * t_pad_right} ║{RESET}",
+                f"{CYAN}╚{'═' * (inner_w + 2)}╝{RESET}",
+                f" {BOLD}Node:{RESET} {WHITE}{node_name}{RESET} ({status_badge})   {BOLD}PID:{RESET} {DIM}{farmer_pid}{RESET}   {BOLD}Uptime:{RESET} {WHITE}{uptime_str}{RESET}   {BOLD}Time:{RESET} {DIM}{time.strftime('%H:%M:%S')}{RESET}",
+                f" {BOLD}CPU:{RESET}  {render_cpu_bar(cpu_pct, width=max(6, min(16, cols // 10)))}   {BOLD}RAM:{RESET} {ram_str}",
+                f"{CYAN}{'─' * (inner_w + 4)}{RESET}",
+                f" {BOLD}👥 ACTIVE ACCOUNTS:{RESET} {GREEN}{BOLD}{total_farming}{RESET} {GREEN}Farming 🟢{RESET}  |  {YELLOW}{BOLD}{total_waiting}{RESET} {YELLOW}Seeking Streamer{RESET}  {DIM}(Total: {total_acc}){RESET}",
+                f"{CYAN}{'─' * (inner_w + 4)}{RESET}",
+                f" {BOLD}🎮 GAMES BREAKDOWN:{RESET}"
             ]
 
             # Dynamic Responsive Table Layout
             if games:
-                # Calculate column widths to fill terminal width
-                # inner_w + 2 is total width available
-                # Table format: ' ┌─{w_game}─┬─{w_acc}─┬─{w_streamers}─┬─{w_time}─┐'
-                # Separator chars count = 13 (border + 4 * 2 spaces + 3 vertical bars)
-                avail_table_w = max(40, (inner_w + 2) - 13)
+                table_target_w = inner_w + 4
+                avail_table_w = max(36, table_target_w - 13)
                 
-                w_acc = 10
+                w_acc = 9
                 rem_w = avail_table_w - w_acc
-                w_game = max(14, int(rem_w * 0.38))
-                w_streamers = max(14, int(rem_w * 0.34))
-                w_time = max(12, rem_w - w_game - w_streamers)
+                w_game = max(12, int(rem_w * 0.38))
+                w_streamers = max(12, int(rem_w * 0.34))
+                w_time = max(10, rem_w - w_game - w_streamers)
 
-                lines.append(f"  ┌─{'─'*w_game}─┬─{'─'*w_acc}─┬─{'─'*w_streamers}─┬─{'─'*w_time}─┐")
-                lines.append(f"  │ {BOLD}{'Game Name':<{w_game}}{RESET} │ {BOLD}{'Accounts':<{w_acc}}{RESET} │ {BOLD}{'Live Streamers':<{w_streamers}}{RESET} │ {BOLD}{'Progress / Time':<{w_time}}{RESET} │")
-                lines.append(f"  ├─{'─'*w_game}─┼─{'─'*w_acc}─┼─{'─'*w_streamers}─┼─{'─'*w_time}─┤")
+                lines.append(f"{CYAN}┌─{'─'*w_game}─┬─{'─'*w_acc}─┬─{'─'*w_streamers}─┬─{'─'*w_time}─┐{RESET}")
+                lines.append(f"{CYAN}│{RESET} {BOLD}{'Game Name':<{w_game}}{RESET} {CYAN}│{RESET} {BOLD}{'Accounts':<{w_acc}}{RESET} {CYAN}│{RESET} {BOLD}{'Live Streamers':<{w_streamers}}{RESET} {CYAN}│{RESET} {BOLD}{'Progress / Time':<{w_time}}{RESET} {CYAN}│{RESET}")
+                lines.append(f"{CYAN}├─{'─'*w_game}─┼─{'─'*w_acc}─┼─{'─'*w_streamers}─┼─{'─'*w_time}─┤{RESET}")
 
                 for g_name, g_info in games.items():
                     cnt = g_info.get('count', 0)
@@ -245,7 +265,7 @@ def main():
                         left_cell = f"{CYAN}{time_left_str}{RESET} {DIM}({min_w}/{req_w}m){RESET}"
 
                     display_g = truncate_visible(g_name, w_game)
-                    acc_cell = f"{YELLOW}{cnt:>3} acc{RESET}"
+                    acc_cell = f"{YELLOW}{cnt:>2} acc{RESET}"
 
                     g_pad = pad_visible(f"{WHITE}{display_g}{RESET}", w_game)
                     a_pad = pad_visible(acc_cell, w_acc)
@@ -253,14 +273,14 @@ def main():
                     s_pad = pad_visible(f"{st_color}{st_list}{RESET}", w_streamers)
                     t_pad = pad_visible(left_cell, w_time)
 
-                    lines.append(f"  │ {g_pad} │ {a_pad} │ {s_pad} │ {t_pad} │")
+                    lines.append(f"{CYAN}│{RESET} {g_pad} {CYAN}│{RESET} {a_pad} {CYAN}│{RESET} {s_pad} {CYAN}│{RESET} {t_pad} {CYAN}│{RESET}")
 
-                lines.append(f"  └─{'─'*w_game}─┴─{'─'*w_acc}─┴─{'─'*w_streamers}─┴─{'─'*w_time}─┘")
+                lines.append(f"{CYAN}└─{'─'*w_game}─┴─{'─'*w_acc}─┴─{'─'*w_streamers}─┴─{'─'*w_time}─┘{RESET}")
             else:
-                lines.append(f"    {DIM}No accounts currently assigned. Waiting for master server tasks...{RESET}")
+                lines.append(f"   {DIM}No accounts currently assigned. Waiting for master server tasks...{RESET}")
 
             lines.append("")
-            lines.append(f"  {BOLD}📜 RECENT ACTIVITY:{RESET}")
+            lines.append(f" {BOLD}📜 RECENT ACTIVITY:{RESET}")
             
             # Calculate remaining vertical rows for events dynamically
             fixed_lines_count = len(lines) + 3  # footer lines
@@ -268,13 +288,14 @@ def main():
 
             if recent_events:
                 for evt in recent_events[:max_events]:
-                    truncated_evt = truncate_visible(evt, (inner_w + 2) - 6)
-                    lines.append(f"   {CYAN}•{RESET} {DIM}{truncated_evt}{RESET}")
+                    truncated_evt = truncate_visible(evt, (inner_w + 4) - 4)
+                    lines.append(f"  {CYAN}•{RESET} {DIM}{truncated_evt}{RESET}")
             else:
-                lines.append(f"   {DIM}Waiting for telemetry stream from farmer process...{RESET}")
+                lines.append(f"  {DIM}Waiting for telemetry stream from farmer process...{RESET}")
 
-            lines.append(f" {CYAN}{'─' * (inner_w + 2)}{RESET}")
-            lines.append(f"  {DIM}Auto-refreshes live (1s) • Auto-scales to window ({cols}x{rows}) • Closes with worker{RESET}")
+            lines.append(f"{CYAN}{'─' * (inner_w + 4)}{RESET}")
+            footer = truncate_visible(f"Live (1s) • Auto-scaled ({term_size.columns}x{rows}) • Closes with worker", inner_w + 4)
+            lines.append(f" {DIM}{footer}{RESET}")
 
             clear_screen()
             sys.stdout.write("\n".join(lines) + "\n")
