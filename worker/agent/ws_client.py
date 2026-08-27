@@ -26,6 +26,7 @@ class WebSocketClient:
         self.running = False
         self.tasks = []
         self.spawn_semaphore = asyncio.Semaphore(50)
+        self.pending_outbox = []
 
     async def connect(self):
         headers = {'Authorization': f'Bearer {self.worker_token}'} if self.worker_token else {}
@@ -33,17 +34,18 @@ class WebSocketClient:
             self.ws = await websockets.connect(
                 self.master_url, 
                 additional_headers=headers,
-                ping_interval=30,
-                ping_timeout=30
+                ping_interval=20,
+                ping_timeout=20
             )
         except TypeError:
             self.ws = await websockets.connect(
                 self.master_url, 
                 extra_headers=headers,
-                ping_interval=30,
-                ping_timeout=30
+                ping_interval=20,
+                ping_timeout=20
             )
         logger.info(f"Connected to {self.master_url}")
+        await self.flush_outbox()
 
 
     async def run(self):
@@ -237,12 +239,40 @@ class WebSocketClient:
                 "type": "ACCOUNT_AUTH_COMPLETE"
             })
 
-    async def send(self, message: dict):
+    async def send(self, message: dict, critical: bool = False):
+        msg_type = message.get("type", "")
+        is_critical = critical or msg_type in (
+            "ACCOUNT_AUTH_SUCCESS",
+            "ACCOUNT_AUTH_FAILED",
+            "ACCOUNT_AUTH_COMPLETE",
+            "CONTAINER_EVENT"
+        )
         if self.ws:
             try:
                 await self.ws.send(json.dumps(message))
+                return True
             except (ConnectionClosed, Exception) as e:
-                logger.debug(f"Could not send message: {e}")
+                logger.debug(f"Could not send message ({msg_type}): {e}")
+        
+        if is_critical:
+            self.pending_outbox.append(message)
+            logger.info(f"WebSocket not connected. Buffered critical '{msg_type}' message for delivery upon reconnect.")
+        return False
+
+    async def flush_outbox(self):
+        if not self.pending_outbox:
+            return
+        count = len(self.pending_outbox)
+        logger.info(f"Flushing {count} buffered message(s) to Master server...")
+        while self.pending_outbox and self.ws:
+            msg = self.pending_outbox.pop(0)
+            try:
+                await self.ws.send(json.dumps(msg))
+                logger.info(f"Delivered buffered message: {msg.get('type')}")
+            except Exception as e:
+                logger.error(f"Failed to deliver buffered message ({msg.get('type')}): {e}")
+                self.pending_outbox.insert(0, msg)
+                break
 
 
     def auto_detect_ip(self) -> str:
