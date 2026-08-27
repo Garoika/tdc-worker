@@ -43,8 +43,8 @@ def get_linux_terminal_cmd(base_cmd: list) -> list | None:
     if has_display:
         candidates = [
             os.environ.get("TERMINAL"),
-            "kitty",
             "foot",
+            "kitty",
             "alacritty",
             "ghostty",
             "gnome-terminal",
