@@ -10,6 +10,12 @@ class LogStreamer:
         # User login pattern: [TwitchUser - login]
         self.user_re = re.compile(r'\[TwitchUser\s*-\s*([a-zA-Z0-9_]+)\]', re.IGNORECASE)
         
+        # 0. Campaign Progress pattern from C# bot (overall campaign progress + drop breakdown)
+        self.campaign_progress_re = re.compile(
+            r'\[Campaign Progress\]\s*([^|]+)\|\s*(\d+)\s*/\s*(\d+)\s*(?:minutes?|min)\s*(?:\((\d+)%\))?\s*(?:\|\s*Drop\s*(\d+)\s*/\s*(\d+)\s*"([^"]*)")?(?::\s*(\d+)\s*/\s*(\d+))?',
+            re.IGNORECASE
+        )
+        
         # 1. Strict Progress patterns (MUST contain minutes/min or bracketed progress)
         self.prog_watched_re = re.compile(r'(\d+)\s*/\s*(\d+)\s*(?:minutes?|min)\s*watched', re.IGNORECASE)
         self.prog_min_re = re.compile(r'(\d+)\s*(?:/|of)\s*(\d+)\s*(?:minutes?|min)', re.IGNORECASE)
@@ -62,30 +68,66 @@ class LogStreamer:
             if chk_match:
                 new_campaign_detected = chk_match.group(1).strip(' "\'[]:-,')
 
-            # 1. Explicit Progress parsing (e.g. "19/60 minutes watched")
+            # 1. Explicit Progress parsing (Campaign total prioritized, then fallback to single drop)
             if not any(ign in line_str.lower() for ign in ['group of channels', 'trying next group', 'finished campaigns', 'watching 100 seconds', 'watching 1999']):
-                p_match = self.prog_watched_re.search(line_str) or self.prog_min_re.search(line_str) or self.prog_bracket_re.search(line_str)
-                if p_match:
+                cp_match = self.campaign_progress_re.search(line_str)
+                if cp_match:
                     try:
-                        c_min = int(p_match.group(1))
-                        t_min = int(p_match.group(2))
-                        if 0 <= c_min <= 10000 and 0 < t_min <= 10000:
-                            telemetry['watched_minutes'] = c_min
-                            telemetry['target_minutes'] = t_min
-                            telemetry['current_minutes'] = c_min
-                            telemetry['required_minutes'] = t_min
-                            telemetry['percentage'] = min(100, int(round((c_min / t_min) * 100)))
-                    except Exception:
-                        pass
+                        c_name = cp_match.group(1).strip()
+                        c_watched = int(cp_match.group(2))
+                        c_total = int(cp_match.group(3))
+                        c_pct = int(cp_match.group(4)) if cp_match.group(4) else (int(round((c_watched / c_total) * 100)) if c_total > 0 else 0)
 
-                pct_match = self.prog_pct_re.search(line_str)
-                if pct_match and 'percentage' not in telemetry:
-                    try:
-                        pct_val = int(float(pct_match.group(1)))
-                        if 0 <= pct_val <= 100:
-                            telemetry['percentage'] = pct_val
+                        # Primary progress is strictly the overall campaign progress
+                        telemetry['watched_minutes'] = c_watched
+                        telemetry['target_minutes'] = c_total
+                        telemetry['current_minutes'] = c_watched
+                        telemetry['required_minutes'] = c_total
+                        telemetry['percentage'] = min(100, max(0, c_pct))
+
+                        telemetry['campaign_name'] = c_name
+                        telemetry['campaign_watched'] = c_watched
+                        telemetry['campaign_total'] = c_total
+                        telemetry['campaign_percentage'] = min(100, max(0, c_pct))
+
+                        if cp_match.group(5):
+                            telemetry['drop_index'] = int(cp_match.group(5))
+                        if cp_match.group(6):
+                            telemetry['drop_total'] = int(cp_match.group(6))
+                        if cp_match.group(7):
+                            d_name = cp_match.group(7).strip()
+                            if d_name:
+                                telemetry['drop_name'] = d_name
+                                telemetry['current_drop'] = d_name
+                        if cp_match.group(8):
+                            telemetry['drop_watched'] = int(cp_match.group(8))
+                        if cp_match.group(9):
+                            telemetry['drop_required'] = int(cp_match.group(9))
                     except Exception:
                         pass
+                else:
+                    p_match = self.prog_watched_re.search(line_str) or self.prog_min_re.search(line_str) or self.prog_bracket_re.search(line_str)
+                    if p_match:
+                        try:
+                            c_min = int(p_match.group(1))
+                            t_min = int(p_match.group(2))
+                            if 0 <= c_min <= 10000 and 0 < t_min <= 10000:
+                                telemetry['watched_minutes'] = c_min
+                                telemetry['target_minutes'] = t_min
+                                telemetry['current_minutes'] = c_min
+                                telemetry['required_minutes'] = t_min
+                                telemetry['percentage'] = min(100, int(round((c_min / t_min) * 100)))
+                        except Exception:
+                            pass
+
+                    pct_match = self.prog_pct_re.search(line_str)
+                    if pct_match and 'percentage' not in telemetry:
+                        try:
+                            pct_val = int(float(pct_match.group(1)))
+                            if 0 <= pct_val <= 100:
+                                telemetry['percentage'] = pct_val
+                        except Exception:
+                            pass
 
             # 2. Drop item name parsing
             d_match = (
