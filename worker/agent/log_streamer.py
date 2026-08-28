@@ -172,9 +172,8 @@ class LogStreamer:
                 telemetry['is_actively_watching'] = True
 
         # If campaign changed to a new one
-        if new_campaign_detected and 'drop_name' not in telemetry:
-            telemetry['drop_name'] = new_campaign_detected
-            telemetry['current_drop'] = new_campaign_detected
+        if new_campaign_detected and 'campaign_name' not in telemetry:
+            telemetry['campaign_name'] = new_campaign_detected
 
         return telemetry
 
