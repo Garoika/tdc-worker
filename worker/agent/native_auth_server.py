@@ -28,10 +28,10 @@ class NativeAuthService:
             return
         self.runner = web.AppRunner(self.app, access_log=None)
         await self.runner.setup()
-        self.site = web.TCPSite(self.runner, '0.0.0.0', self.port)
+        self.site = web.TCPSite(self.runner, '127.0.0.1', self.port)
         await self.site.start()
         self.is_running = True
-        logger.info(f"⚡ Native Auth Server started on http://0.0.0.0:{self.port} for Chrome Extension")
+        logger.info(f"⚡ Native Auth Server started on http://127.0.0.1:{self.port} for Chrome Extension")
 
     async def stop(self):
         """Stop the local HTTP server after briefly signaling finished status."""
@@ -47,11 +47,19 @@ class NativeAuthService:
         self.current_auth_state = {}
         logger.info("Native Auth Server stopped")
 
+    _ALLOWED_ORIGINS = ("chrome-extension://", "http://127.0.0.1", "http://localhost")
+
+    def _cors_origin(self, request: web.Request) -> str:
+        origin = request.headers.get("Origin", "")
+        if any(origin.startswith(p) for p in self._ALLOWED_ORIGINS):
+            return origin
+        return "http://127.0.0.1"
+
     async def _handle_cors(self, request: web.Request):
         return web.Response(
             status=200,
             headers={
-                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Origin": self._cors_origin(request),
                 "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type"
             }
@@ -62,7 +70,7 @@ class NativeAuthService:
             return await self._handle_cors(request)
 
         headers = {
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": self._cors_origin(request),
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
             "Cache-Control": "no-store, no-cache, must-revalidate"
