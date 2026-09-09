@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import time
+import socket
 import websockets
 from websockets.exceptions import ConnectionClosed
 
@@ -28,23 +30,43 @@ class WebSocketClient:
         self.tasks = []
         self.spawn_semaphore = asyncio.Semaphore(50)
         self.pending_outbox = []
+        self.last_heartbeat_ack = 0.0
 
     async def connect(self):
         headers = {'Authorization': f'Bearer {self.worker_token}'} if self.worker_token else {}
+        connect_kwargs = {
+            "ping_interval": 10,
+            "ping_timeout": 10,
+            "close_timeout": 5
+        }
         try:
             self.ws = await websockets.connect(
                 self.master_url, 
                 additional_headers=headers,
-                ping_interval=20,
-                ping_timeout=20
+                **connect_kwargs
             )
         except TypeError:
             self.ws = await websockets.connect(
                 self.master_url, 
                 extra_headers=headers,
-                ping_interval=20,
-                ping_timeout=20
+                **connect_kwargs
             )
+        
+        # Enable TCP keepalive at OS level to quickly detect dead intermediate routers/NAT
+        try:
+            sock = self.ws.transport.get_extra_info('socket')
+            if sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if hasattr(socket, 'TCP_KEEPIDLE'):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
+                if hasattr(socket, 'TCP_KEEPINTVL'):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+                if hasattr(socket, 'TCP_KEEPCNT'):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        except Exception as ke:
+            logger.debug(f"Could not configure TCP keepalive: {ke}")
+
+        self.last_heartbeat_ack = time.monotonic()
         logger.info(f"Connected to {self.master_url}")
         await self.flush_outbox()
 
@@ -56,6 +78,7 @@ class WebSocketClient:
         while self.running:
             try:
                 await self.connect()
+                self.last_heartbeat_ack = time.monotonic()
                 state_manager.update_system_info(master_connected=True)
                 retry_delay = 1
                 
@@ -74,13 +97,19 @@ class WebSocketClient:
                 await self.listen_loop()
                 
             except (ConnectionClosed, ConnectionRefusedError, Exception) as e:
-                logger.error(f"WebSocket error: {e}")
+                logger.error(f"WebSocket connection error: {e}")
                 state_manager.update_system_info(master_connected=False)
                 self.cancel_tasks()
+                if self.ws:
+                    try:
+                        await self.ws.close()
+                    except Exception:
+                        pass
+                    self.ws = None
                 if not self.running:
                     break
                 
-                logger.info(f"Reconnecting in {retry_delay}s...")
+                logger.info(f"Reconnecting to master in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 30)
 
@@ -90,7 +119,12 @@ class WebSocketClient:
                 msg = json.loads(message_str)
                 msg_type = msg.get('type')
                 
-                if msg_type == 'INIT':
+                if msg_type == 'HEARTBEAT_ACK':
+                    self.last_heartbeat_ack = time.monotonic()
+                    state_manager.update_system_info(master_connected=True)
+                    continue
+
+                elif msg_type == 'INIT':
                     worker_name = msg.get('name')
                     if worker_name:
                         state_manager.update_system_info(node_name=worker_name)
@@ -248,12 +282,20 @@ class WebSocketClient:
             "ACCOUNT_AUTH_COMPLETE",
             "CONTAINER_EVENT"
         )
-        if self.ws:
+        if self.ws and not self.ws.closed:
             try:
                 await self.ws.send(json.dumps(message))
                 return True
             except (ConnectionClosed, Exception) as e:
-                logger.debug(f"Could not send message ({msg_type}): {e}")
+                logger.warning(f"Could not send message ({msg_type}) to master: {e}. Marking disconnected.")
+                state_manager.update_system_info(master_connected=False)
+                if self.ws:
+                    try:
+                        await self.ws.close()
+                    except Exception:
+                        pass
+        else:
+            state_manager.update_system_info(master_connected=False)
         
         if is_critical:
             self.pending_outbox.append(message)
@@ -309,7 +351,22 @@ class WebSocketClient:
         public_ip = self.auto_detect_ip()
         sync_counter = 0
         
-        while True:
+        while self.running and self.ws and not self.ws.closed:
+            # Watchdog: ensure master server responds to heartbeats
+            now = time.monotonic()
+            if self.last_heartbeat_ack > 0 and (now - self.last_heartbeat_ack) > 15:
+                logger.warning(
+                    f"Heartbeat ACK timeout ({now - self.last_heartbeat_ack:.1f}s without ACK from master). "
+                    "Connection is dead. Forcing reconnect..."
+                )
+                state_manager.update_system_info(master_connected=False)
+                if self.ws:
+                    try:
+                        await self.ws.close()
+                    except Exception:
+                        pass
+                break
+
             try:
                 metrics_data = self.metrics.to_dict()
                 current_containers = await self.runner.get_running_container_count()
@@ -318,12 +375,22 @@ class WebSocketClient:
                     ram_used=metrics_data.get('ram_used_mb', 0.0),
                     ram_total=metrics_data.get('ram_total_mb', 0.0)
                 )
-                await self.send({
+                sent = await self.send({
                     "type": "HEARTBEAT",
                     "metrics": metrics_data,
                     "current_containers": current_containers,
                     "public_ip": public_ip
                 })
+                if not sent:
+                    logger.warning("Failed to send HEARTBEAT to master. Forcing reconnect...")
+                    state_manager.update_system_info(master_connected=False)
+                    if self.ws:
+                        try:
+                            await self.ws.close()
+                        except Exception:
+                            pass
+                    break
+
                 await self.runner.cleanup_dead_containers()
 
                 sync_counter += 1
