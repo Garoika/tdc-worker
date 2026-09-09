@@ -71,9 +71,9 @@ if ":8000/ws/workers" in MASTER_URL:
     MASTER_URL = MASTER_URL.replace(":8000/ws/workers", "/ws/workers")
 WORKER_TOKEN = os.environ.get('WORKER_TOKEN') or file_config.get('worker_token') or ''
 WORKER_PUBLIC_IP = os.environ.get('WORKER_PUBLIC_IP') or file_config.get('worker_public_ip') or ''
-RUNNER_TYPE = (os.environ.get('RUNNER_TYPE') or file_config.get('runner_type') or 'process').lower()
-DOCKER_IMAGE = os.environ.get('DOCKER_IMAGE') or file_config.get('docker_image') or 'fools228/tdc-farmer:latest'
-MAX_CONTAINERS = int(os.environ.get('MAX_CONTAINERS', '100'))
+RUNNER_TYPE = 'process'
+MAX_PROCESSES = int(os.environ.get('MAX_PROCESSES') or os.environ.get('MAX_CONTAINERS', '100'))
+MAX_CONTAINERS = MAX_PROCESSES
 HEARTBEAT_INTERVAL = int(os.environ.get('HEARTBEAT_INTERVAL', '3'))
 WORKER_NAME = os.environ.get('WORKER_NAME') or file_config.get('worker_name') or 'Worker'
 LOG_TAIL_LINES = int(os.environ.get('LOG_TAIL_LINES', '50'))

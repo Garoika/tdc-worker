@@ -16,7 +16,6 @@ class ProcessManager:
     """
     Manages TwitchDropsBot as a single native C# .NET process running all
     assigned accounts in parallel via async task loops (Task.WhenAll).
-    Implements the exact same interface as DockerManager for 100% compatibility.
     """
     def __init__(self):
         self.exe_path = FARMER_EXE
@@ -445,6 +444,36 @@ class ProcessManager:
                             target_login = info['login']
                             break
 
+        # 1. Check if on-disk log files exist in farmer_bin/logs/
+        logs_dir = self.bin_dir / 'logs'
+        if not logs_dir.exists():
+            logs_dir = self.bin_dir / 'Logs'
+
+        if target_login and logs_dir.exists():
+            user_log_file = logs_dir / f"logs-TwitchUser-{target_login}.log"
+            if user_log_file.exists():
+                try:
+                    with open(user_log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        file_lines = f.read().splitlines()
+                        if tail > 0:
+                            file_lines = file_lines[-tail:]
+                        return "\n".join(file_lines)
+                except Exception as e:
+                    logger.debug(f"Failed to read user log file {user_log_file}: {e}")
+
+        if not target_login and logs_dir.exists():
+            sys_log_file = logs_dir / "system-logs.txt"
+            if sys_log_file.exists():
+                try:
+                    with open(sys_log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        file_lines = f.read().splitlines()
+                        if tail > 0:
+                            file_lines = file_lines[-tail:]
+                        return "\n".join(file_lines)
+                except Exception as e:
+                    logger.debug(f"Failed to read system-logs.txt: {e}")
+
+        # 2. Fallback to in-memory log buffer
         lines = list(self.log_buffer)
 
         if target_login:
@@ -459,14 +488,13 @@ class ProcessManager:
             lines = lines[-tail:]
         return "\n".join(lines)
 
-    async def run_auth_container(self, acc: dict, temp_dir: str):
+    async def run_auth_process(self, acc: dict, temp_dir: str):
         """Run standalone auth process for Twitch Device Code authorization."""
         login = acc.get('login')
         config_path = Path(temp_dir) / f"config-{login}.json"
         
         env = {
-            "ADD_ACCOUNT": "true",
-            "INSIDE_DOCKER": "false"
+            "ADD_ACCOUNT": "true"
         }
         
         proc = subprocess.Popen(
@@ -478,3 +506,6 @@ class ProcessManager:
             text=True
         )
         return proc
+
+    # Backward compatibility alias
+    run_auth_container = run_auth_process

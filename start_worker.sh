@@ -184,15 +184,13 @@ if [ ! -f "$CONFIG_FILE" ]; then
     fi
 
     read -p "Enter Worker Public/LAN IP (optional, press Enter for auto): " IP_INPUT
-    read -p "Enter Runner Mode [process/docker] (default: process): " RUNNER_INPUT
-    RUNNER_INPUT="${RUNNER_INPUT:-process}"
     
     cat <<EOF > "$CONFIG_FILE"
 {
   "master_url": "$MASTER_INPUT",
   "worker_token": "$TOKEN_INPUT",
   "worker_public_ip": "$IP_INPUT",
-  "runner_type": "$RUNNER_INPUT"
+  "runner_type": "process"
 }
 EOF
 fi
@@ -201,39 +199,16 @@ fi
 MASTER_URL=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('master_url', ''))" 2>/dev/null)
 WORKER_TOKEN=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('worker_token', ''))" 2>/dev/null)
 WORKER_PUBLIC_IP=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('worker_public_ip', ''))" 2>/dev/null)
-RUNNER_TYPE=$("$RUN_PYTHON" -c "import json; print(json.load(open('$CONFIG_FILE')).get('runner_type', 'process'))" 2>/dev/null)
+RUNNER_TYPE="process"
 
 MASTER_URL="${MASTER_URL:-ws://185.104.248.62/ws/workers}"
-RUNNER_TYPE="${RUNNER_TYPE:-process}"
 
 # Auto-fix port 8000 if master is behind nginx
 if [[ "$MASTER_URL" == *":8000/ws/workers"* ]]; then
     MASTER_URL="${MASTER_URL//:8000\/ws\/workers/\/ws\/workers}"
 fi
 
-echo "      [OK] Config loaded: $MASTER_URL (Mode: ${RUNNER_TYPE^^})"
-
-# Optional Docker check ONLY if explicitly configured by user
-if [ "$RUNNER_TYPE" == "docker" ]; then
-    echo ""
-    echo "[Docker Check] Checking Docker daemon for Docker Runner Mode..."
-    if ! command -v docker &>/dev/null; then
-        echo "      [INFO] Docker runner requested but docker is not installed. Installing Docker..."
-        curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-        run_root sh /tmp/get-docker.sh
-        rm -f /tmp/get-docker.sh
-    fi
-    if command -v systemctl &>/dev/null; then
-        if ! systemctl is-active --quiet docker 2>/dev/null; then
-            run_root systemctl enable --now docker
-        fi
-    fi
-    if [ -e /var/run/docker.sock ]; then
-        if ! docker info &>/dev/null; then
-            run_root chmod 666 /var/run/docker.sock 2>/dev/null || true
-        fi
-    fi
-fi
+echo "      [OK] Config loaded: $MASTER_URL (Native Process Mode)"
 
 # Start Worker Agent
 echo ""

@@ -14,12 +14,13 @@ from agent.state_manager import state_manager
 logger = logging.getLogger(__name__)
 
 class WebSocketClient:
-    def __init__(self, master_url: str, worker_token: str, docker_manager: Any, metrics_collector: SystemMetrics):
+    def __init__(self, master_url: str, worker_token: str, runner: Any, metrics_collector: SystemMetrics):
         self.master_url = master_url
         self.worker_token = worker_token
-        self.docker = docker_manager
+        self.runner = runner
+        self.docker = runner  # backward compatibility alias
         self.metrics = metrics_collector
-        self.log_streamer = LogStreamer(self.docker)
+        self.log_streamer = LogStreamer(self.runner)
         self.native_auth = NativeAuthService(port=5000)
         self.auth_cancel_event = asyncio.Event()
         self.ws = None
@@ -59,7 +60,7 @@ class WebSocketClient:
                 retry_delay = 1
                 
                 # Sync state on connect
-                containers = await self.docker.list_running_containers()
+                containers = await self.runner.list_running_containers()
                 await self.send({
                     "type": "SYNC_STATE",
                     "containers": containers
@@ -126,7 +127,7 @@ class WebSocketClient:
         cid = msg.get('container_id')
         job_id = msg.get('job_id')
         login = msg.get('login')
-        logs = await self.docker.get_container_logs(container_id=cid, job_id=job_id, login=login, tail=0)
+        logs = await self.runner.get_container_logs(container_id=cid, job_id=job_id, login=login, tail=0)
         await self.send({
             "type": "CONTAINER_LOGS_RESPONSE",
             "request_id": req_id,
@@ -137,7 +138,7 @@ class WebSocketClient:
         async with self.spawn_semaphore:
             job_id = msg.get('job_id')
             try:
-                cid = await self.docker.spawn_container(
+                cid = await self.runner.spawn_container(
                     job_id=job_id,
                     account=msg.get('account', {}),
                     target=msg.get('target', {}),
@@ -160,7 +161,7 @@ class WebSocketClient:
     async def handle_stop_container(self, msg: dict):
         cid = msg.get('container_id')
         job_id = msg.get('job_id')
-        success = await self.docker.stop_container(cid, job_id=job_id)
+        success = await self.runner.stop_container(cid, job_id=job_id)
         await self.send({
             "type": "CONTAINER_EVENT",
             "job_id": job_id,
@@ -169,10 +170,10 @@ class WebSocketClient:
         })
 
     async def handle_stop_all_containers(self):
-        logger.info("Stopping all running containers on worker node")
-        containers = await self.docker.list_running_containers()
+        logger.info("Stopping all running farming processes on worker node")
+        containers = await self.runner.list_running_containers()
         for c in containers:
-            await self.docker.stop_container(container_id=c['container_id'])
+            await self.runner.stop_container(container_id=c['container_id'])
 
     async def process_auth_queue(self, accounts: list):
         """Process a queue of accounts for Twitch Device Code authorization via pure Python HTTP server on port 5000."""
@@ -311,7 +312,7 @@ class WebSocketClient:
         while True:
             try:
                 metrics_data = self.metrics.to_dict()
-                current_containers = await self.docker.get_running_container_count()
+                current_containers = await self.runner.get_running_container_count()
                 state_manager.update_metrics(
                     cpu=metrics_data.get('cpu_usage_percent', 0.0),
                     ram_used=metrics_data.get('ram_used_mb', 0.0),
@@ -323,12 +324,12 @@ class WebSocketClient:
                     "current_containers": current_containers,
                     "public_ip": public_ip
                 })
-                await self.docker.cleanup_dead_containers()
+                await self.runner.cleanup_dead_containers()
 
                 sync_counter += 1
                 if sync_counter >= 3:
                     sync_counter = 0
-                    containers = await self.docker.list_running_containers()
+                    containers = await self.runner.list_running_containers()
                     await self.send({
                         "type": "SYNC_STATE",
                         "containers": containers
@@ -340,10 +341,10 @@ class WebSocketClient:
     async def log_monitor_loop(self):
         while True:
             try:
-                containers = await self.docker.list_running_containers()
+                containers = await self.runner.list_running_containers()
                 for c in containers:
                     cid = c['container_id']
-                    status = await self.docker.get_container_status(cid)
+                    status = await self.runner.get_container_status(cid)
                     
                     labels = c.get('labels', {}) or {}
                     login = labels.get('tdc.login') or c.get('login') or ''

@@ -6,9 +6,8 @@ import logging
 import shutil
 import subprocess
 
-from agent.config import MASTER_URL, WORKER_TOKEN, DOCKER_IMAGE, RUNNER_TYPE
+from agent.config import MASTER_URL, WORKER_TOKEN, RUNNER_TYPE
 from agent.metrics import SystemMetrics
-from agent.docker_manager import DockerManager
 from agent.process_manager import ProcessManager
 from agent.ws_client import WebSocketClient
 from agent.autoupdate import AutoUpdater
@@ -113,9 +112,7 @@ def launch_monitor():
 async def main():
     logger.info("Starting Twitch Drops Farm Worker Node")
     logger.info(f"Master URL: {MASTER_URL}")
-    logger.info(f"Runner Mode: {RUNNER_TYPE.upper()}")
-    if RUNNER_TYPE == 'docker':
-        logger.info(f"Docker Image: {DOCKER_IMAGE}")
+    logger.info(f"Runner Mode: NATIVE PROCESS")
 
     # Launch companion Live Monitor dashboard in a second console window
     launch_monitor()
@@ -123,10 +120,7 @@ async def main():
     autoupdater = AutoUpdater(check_interval=30)
 
     metrics = SystemMetrics()
-    if RUNNER_TYPE == 'docker':
-        runner = DockerManager()
-    else:
-        runner = ProcessManager()
+    runner = ProcessManager()
 
     runner.ensure_farmer_image()
     ws_client = WebSocketClient(MASTER_URL, WORKER_TOKEN, runner, metrics)

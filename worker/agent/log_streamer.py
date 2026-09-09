@@ -1,12 +1,12 @@
 import re
 import logging
-from agent.docker_manager import DockerManager
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 class LogStreamer:
-    def __init__(self, docker_manager: DockerManager):
-        self.docker_manager = docker_manager
+    def __init__(self, process_manager: Any):
+        self.process_manager = process_manager
         # User login pattern: [TwitchUser - login]
         self.user_re = re.compile(r'\[TwitchUser\s*-\s*([a-zA-Z0-9_]+)\]', re.IGNORECASE)
         
@@ -178,5 +178,5 @@ class LogStreamer:
         return telemetry
 
     async def process_container_logs(self, container_id: str, tail: int, job_id: str = None, login: str = None) -> dict:
-        logs = await self.docker_manager.get_container_logs(container_id=container_id, job_id=job_id, login=login, tail=tail)
+        logs = await self.process_manager.get_container_logs(container_id=container_id, job_id=job_id, login=login, tail=tail)
         return self.parse_logs(logs)
