@@ -250,7 +250,7 @@ def main():
                     is_active = g_info.get('is_active', False)
                     st_list = ", ".join(g_info.get('streamers', []))
                     if not st_list:
-                        st_list = "Seeking streamer..."
+                        st_list = "Active Farming" if is_active else "Seeking streamer..."
                     st_list = truncate_visible(st_list, w_streamers)
 
                     min_w = g_info.get('min_watched', 0)

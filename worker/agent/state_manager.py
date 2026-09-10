@@ -88,11 +88,26 @@ class StateManager:
             return
         
         now_str = time.strftime("%H:%M:%S")
-        watched = telemetry.get('watched_minutes') or telemetry.get('current_minutes') or 0
-        required = telemetry.get('target_minutes') or telemetry.get('required_minutes') or 60
-        pct = telemetry.get('percentage') or (int(round((watched / required) * 100)) if required > 0 else 0)
-        streamer = telemetry.get('active_streamer') or ''
-        drop_name = telemetry.get('drop_name') or ''
+        prev = self.account_telemetry.get(login, {})
+        
+        watched = telemetry.get('watched_minutes') or telemetry.get('current_minutes') or prev.get('watched', 0)
+        required = telemetry.get('target_minutes') or telemetry.get('required_minutes') or prev.get('required', 60)
+        pct = telemetry.get('percentage') or (int(round((watched / required) * 100)) if required > 0 else prev.get('percent', 0))
+        
+        # Preserve known streamer and drop if not reported in this specific log tail slice
+        new_streamer = telemetry.get('active_streamer')
+        if new_streamer and new_streamer.lower() not in ['seeking streamer...', 'auto-seeking...', 'searching...', 'none', '']:
+            streamer = new_streamer
+        else:
+            streamer = prev.get('streamer', '')
+
+        new_drop = telemetry.get('drop_name')
+        if new_drop:
+            drop_name = new_drop
+        else:
+            drop_name = prev.get('drop_name', '')
+
+        is_actively_watching = telemetry.get('is_actively_watching') or prev.get('is_actively_watching', False)
 
         self.account_telemetry[login] = {
             'login': login,
@@ -102,6 +117,7 @@ class StateManager:
             'percent': pct,
             'streamer': streamer,
             'drop_name': drop_name,
+            'is_actively_watching': is_actively_watching,
             'updated_at': now_str
         }
 
@@ -135,7 +151,7 @@ class StateManager:
         game_stats = {}
         for job_id, job in self.active_jobs.items():
             login = job.get('login', '')
-            game = job.get('target', {}).get('game', 'Unknown')
+            game = job.get('game') or job.get('target', {}).get('game') or 'Unknown'
             if game not in game_stats:
                 game_stats[game] = {
                     'count': 0,
@@ -157,8 +173,18 @@ class StateManager:
                 game_stats[game]['min_watched'] = watched
                 
             st = t.get('streamer', '')
-            if st and st.lower() not in ['seeking streamer...', 'auto-seeking...', 'searching...', 'none', '']:
+            has_streamer = bool(st and st.lower() not in ['seeking streamer...', 'auto-seeking...', 'searching...', 'none', ''])
+            is_actively_farming = (
+                has_streamer or 
+                watched > 0 or 
+                t.get('is_actively_watching', False) or 
+                t.get('percent', 0) > 0
+            )
+
+            if has_streamer:
                 game_stats[game]['streamers'].add(st)
+                
+            if is_actively_farming:
                 game_stats[game]['active_count'] += 1
             else:
                 game_stats[game]['waiting_count'] += 1
@@ -170,7 +196,7 @@ class StateManager:
             min_w = g_data['min_watched'] if g_data['min_watched'] is not None else 0
             req_w = g_data['required']
             left_mins = max(0, req_w - min_w)
-            is_active = len(g_data['streamers']) > 0 and g_data['active_count'] > 0
+            is_active = g_data['active_count'] > 0
             
             if is_active:
                 time_left_str = format_duration_en(left_mins)
