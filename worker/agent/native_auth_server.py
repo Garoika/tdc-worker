@@ -120,7 +120,6 @@ class NativeAuthService:
         return (
             f"https://id.twitch.tv/oauth2/authorize"
             f"?client_id={CLIENT_ID}"
-            f"&redirect_uri=https://www.twitch.tv"
             f"&response_type=token"
             f"&scope={urllib.parse.quote(SCOPES)}"
         )

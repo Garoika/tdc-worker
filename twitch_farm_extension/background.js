@@ -141,6 +141,29 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 checkServerStatus();
 setInterval(checkServerStatus, 2000);
 
+// Monitor tab URLs for OAuth redirect containing #access_token=
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    const targetUrl = changeInfo.url || (tab && tab.url);
+    if (targetUrl && targetUrl.includes("access_token=")) {
+        console.log("[Background] 🎯 Captured access_token from tab URL:", targetUrl);
+        const match = targetUrl.match(/access_token=([a-zA-Z0-9]+)/);
+        if (match && match[1]) {
+            const token = match[1];
+            fetch(`${SERVER_URL}/api/token`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ access_token: token })
+            })
+            .then(res => res.json())
+            .then(data => {
+                console.log("[Background] ✅ Token sent to auth server via tab listener!");
+                chrome.tabs.update(tabId, { url: "https://www.twitch.tv/" });
+            })
+            .catch(err => console.error("[Background] ❌ Failed to post token from tab listener:", err));
+        }
+    }
+});
+
 // Listen for messages from content.js
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "WIPE_AND_INJECT") {
