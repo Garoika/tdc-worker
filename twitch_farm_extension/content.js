@@ -40,14 +40,36 @@ function apiFetch(endpoint) {
     });
 }
 
+function postToken(accessToken) {
+    return new Promise((resolve, reject) => {
+        if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
+            return reject(new Error("Extension context invalidated"));
+        }
+        try {
+            chrome.runtime.sendMessage({ action: "POST_TOKEN", accessToken }, (response) => {
+                if (chrome.runtime.lastError) {
+                    return reject(chrome.runtime.lastError);
+                }
+                if (response && response.success) {
+                    resolve(response.data);
+                } else {
+                    reject(new Error(response ? response.error : "Failed to post token"));
+                }
+            });
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
 function getActiveSession() {
-    return new Promise(resolve => chrome.storage.local.get(['active_user_code'], res => resolve(res.active_user_code)));
+    return new Promise(resolve => chrome.storage.local.get(['active_session'], res => resolve(res.active_session)));
 }
 
 function setActiveSession(val) {
     return new Promise(resolve => {
-        if (val === null) chrome.storage.local.remove('active_user_code', resolve);
-        else chrome.storage.local.set({active_user_code: String(val)}, resolve);
+        if (val === null) chrome.storage.local.remove('active_session', resolve);
+        else chrome.storage.local.set({active_session: String(val)}, resolve);
     });
 }
 
@@ -214,7 +236,7 @@ function renderFloatingPanel(index, password) {
                 await apiFetch('/api/skip');
                 await setActiveSession(null);
                 chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                    window.location.href = "https://www.twitch.tv/activate";
+                    window.location.href = "https://www.twitch.tv/";
                 });
             } catch (e) {
                 alert("Ошибка пропуска аккаунта: " + e);
@@ -223,8 +245,38 @@ function renderFloatingPanel(index, password) {
     };
 }
 
+// Check if current URL has #access_token (OAuth redirect callback)
+function checkForOAuthToken() {
+    const hash = window.location.hash;
+    if (!hash || !hash.includes("access_token=")) return false;
+
+    const params = new URLSearchParams(hash.substring(1));
+    const accessToken = params.get("access_token");
+    if (!accessToken) return false;
+
+    console.log("%c[Content] 🎯 OAuth access_token captured from URL hash!", "color: #2cf6b3; font-weight: bold; font-size: 14px;");
+    
+    // Clear the hash from URL to prevent re-processing
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+
+    // Send token to server via background script
+    postToken(accessToken).then(() => {
+        console.log("%c[Content] ✅ Token sent to auth server successfully!", "color: #2cf6b3; font-weight: bold;");
+    }).catch(err => {
+        console.error("[Content] ❌ Failed to send token:", err);
+    });
+
+    return true;
+}
+
 async function handleAccountFlow() {
     console.log("%c[Twitch Farm Helper] 🚀 Extension active on page", "color: #9146FF; font-weight: bold; font-size: 12px;");
+    
+    // First: check if this page has an OAuth token in the URL hash
+    if (checkForOAuthToken()) {
+        return; // Token captured and sent, done
+    }
+
     try {
         // Check if server is active FIRST before doing any redirects or script execution
         const data = await apiFetch('/api/current');
@@ -234,44 +286,15 @@ async function handleAccountFlow() {
             return;
         }
 
-        console.log(`%c[Twitch Farm Helper] 🟢 Auth Server Connected! Account: ${data.login || data.index}, UserCode: ${data.user_code}`, "color: #2cf6b3; font-weight: bold; font-size: 13px;");
+        console.log(`%c[Twitch Farm Helper] 🟢 Auth Server Connected! Account: ${data.login || data.index}`, "color: #2cf6b3; font-weight: bold; font-size: 13px;");
 
-        // Only redirect when server is running and processing an account
-        if (window.location.pathname.includes("/settings/connections") || window.location.pathname.includes("/settings")) {
-            console.log("[Extension] 🎯 Landed on settings page! Waiting for PowerShell to advance to the next account...");
-            
-            const currentSession = await getActiveSession();
-            await setActiveSession(null);
-            
-            // We must wait for the old C# container to be killed and the new one to start
-            setInterval(async () => {
-                try {
-                    const nextData = await apiFetch('/api/current');
-                    if (nextData && nextData.user_code && nextData.user_code !== currentSession) {
-                        console.log("[Extension] New container detected! Proceeding...");
-                        chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                            window.location.href = "https://www.twitch.tv/activate";
-                        });
-                    }
-                } catch(e) {
-                    // Server is offline (container killed by PS script). Just wait.
-                }
-            }, 2000);
-            return;
-        }
-
-        if (data.auth_token && data.user_code) {
-            
-            // If we somehow landed on /activate without the device-code in the URL, force a redirect!
-            if (window.location.pathname === "/activate" && !window.location.search) {
-                window.location.href = `https://www.twitch.tv/activate?device-code=${data.user_code}`;
-                return;
-            }
-
+        // Check if we have an authorize_url to process
+        if (data.authorize_url) {
             const activeSession = await getActiveSession();
-            
-            // If the user_code is different, it's a new auth session
-            if (activeSession !== data.user_code) {
+            const sessionKey = data.login || data.index;
+
+            // New auth session — wipe, inject cookie, navigate to OAuth
+            if (activeSession !== sessionKey) {
                 console.log(`[Extension] 🚀 Native HttpOnly Cookie Wipe & Setup for Acc #${data.index}...`);
                 
                 // Back up extension state
@@ -289,14 +312,16 @@ async function handleAccountFlow() {
                 if (panelT !== null) window.localStorage.setItem("farm_panel_top", panelT);
                 
                 chrome.runtime.sendMessage({ action: "WIPE_AND_INJECT", authToken: data.auth_token }, async () => {
-                    await setActiveSession(data.user_code);
-                    window.location.href = `https://www.twitch.tv/activate?device-code=${data.user_code}`;
+                    await setActiveSession(sessionKey);
+                    // Navigate to OAuth authorize URL
+                    window.location.href = data.authorize_url;
                 });
                 return;
             }
 
+            // Same session — we're on the OAuth page, show panel and run auto-clicker
             renderFloatingPanel(data.login || data.index, data.password);
-            startPolling();
+            startPolling(data);
             startAutoClicker(data.password, data.login || data.index);
         }
     } catch (e) {
@@ -304,31 +329,9 @@ async function handleAccountFlow() {
     }
 }
 
-function startPolling() {
+function startPolling(initialData) {
     const interval = setInterval(async () => {
         try {
-            if (window.location.pathname.includes("/settings/connections") || window.location.pathname.includes("/settings")) {
-                clearInterval(interval);
-                console.log("[Extension] 🎯 Landed on settings page (via SPA)! Waiting for PowerShell to advance to the next account...");
-                
-                const currentSession = await getActiveSession();
-                await setActiveSession(null);
-                
-                setInterval(async () => {
-                    try {
-                        const nextData = await apiFetch('/api/current');
-                        if (nextData && nextData.user_code && nextData.user_code !== currentSession) {
-                            chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                                window.location.href = "https://www.twitch.tv/activate";
-                            });
-                        }
-                    } catch(e) {
-                        // wait
-                    }
-                }, 2000);
-                return;
-            }
-
             let data;
             try {
                 data = await apiFetch('/api/current');
@@ -337,37 +340,13 @@ function startPolling() {
                 return;
             }
             if (!data) return;
-            
-            // 1. Check if we are fully logged in
-            const domLoginElem = document.querySelector('[data-a-target="user-display-name"]');
-            
-            // Use robust data attribute for login button, fallback to text
-            const loginBtn = document.querySelector('[data-a-target="login-button"]') || Array.from(document.querySelectorAll('button, a')).find(b => {
-                const t = (b.innerText || "").toLowerCase().trim();
-                return t === "log in" || t === "войти";
-            });
 
-            // If we see a login button and no user name, we are logged out.
-            // (We cannot check expectedLogin because the C# server doesn't provide it reliably)
-            if (!domLoginElem && loginBtn) {
-                console.log("[Extension] ⚠️ Auth failed or logged out! Wiping and retrying...");
+            // Check if auth is done (token was received by server)
+            if (data.status === "finished" || data.status === "waiting") {
                 clearInterval(interval);
-                
-                const acState = window.localStorage.getItem("farm_autoclick");
-                const panelL = window.localStorage.getItem("farm_panel_left");
-                const panelT = window.localStorage.getItem("farm_panel_top");
-                
-                window.localStorage.clear();
-                window.sessionStorage.clear();
-                
-                if (acState !== null) window.localStorage.setItem("farm_autoclick", acState);
-                if (panelL !== null) window.localStorage.setItem("farm_panel_left", panelL);
-                if (panelT !== null) window.localStorage.setItem("farm_panel_top", panelT);
-                
+                console.log("[Extension] ✅ Auth completed! Wiping and waiting for next...");
                 await setActiveSession(null);
-                chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                    window.location.href = `https://www.twitch.tv/activate?device-code=${data.user_code}`;
-                });
+                chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {});
                 return;
             }
 
@@ -385,13 +364,16 @@ function startPolling() {
                 }
             }
 
-            // 2. Standard polling logic
-            if (data.status === "authorized" || data.status === "skipped") {
+            // Check if a NEW authorize_url appeared (next account)
+            const sessionKey = data.login || data.index;
+            const activeSession = await getActiveSession();
+            if (data.authorize_url && sessionKey !== activeSession) {
                 clearInterval(interval);
-                console.log(`[Extension] ✅ Account #${data.index || ''} ${data.status}! Moving next...`);
+                console.log(`[Extension] 🔄 New account detected: ${sessionKey}`);
                 await setActiveSession(null);
                 chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                    window.location.href = "https://www.twitch.tv/activate";
+                    // Let background.js handle the navigation via checkServerStatus
+                    window.location.href = "https://www.twitch.tv/";
                 });
             }
         } catch (e) {
@@ -440,20 +422,6 @@ function startAutoClicker(password, login) {
                     isClickPending = false;
                 }, Math.floor(Math.random() * 400) + 400);
             }
-            return;
-        }
-
-        const activateBtn = findButtonByText(["Activate", "Активировать"]);
-        if (activateBtn && !activateBtn.disabled && activateBtn.getAttribute("aria-disabled") !== "true") {
-            console.log("[Auto-Clicker] 👉 Found Activate button. Clicking...");
-            isClickPending = true;
-            setTimeout(() => {
-                if (document.body.contains(activateBtn)) {
-                    activateBtn.focus();
-                    activateBtn.click();
-                }
-                isClickPending = false;
-            }, Math.floor(Math.random() * 400) + 400);
             return;
         }
 

@@ -72,7 +72,7 @@ async function wipeTwitchSessionCompletely() {
     });
 }
 
-let lastUserCode = null;
+let lastAuthorizeUrl = null;
 
 async function checkServerStatus() {
     try {
@@ -83,23 +83,23 @@ async function checkServerStatus() {
                 await wipeTwitchSessionCompletely();
             }
             isServerOnline = false;
-            lastUserCode = null;
+            lastAuthorizeUrl = null;
             return;
         }
         const data = await res.json();
         
-        if (data && data.user_code && data.user_code !== lastUserCode) {
-            lastUserCode = data.user_code;
+        if (data && data.authorize_url && data.authorize_url !== lastAuthorizeUrl) {
+            lastAuthorizeUrl = data.authorize_url;
             isServerOnline = true;
-            console.log(`[Background] 🚀 New auth code detected: ${data.user_code}`);
-            openOrFocusTwitchActivate(data.user_code);
+            console.log(`[Background] 🚀 New OAuth auth detected for: ${data.login || data.index}`);
+            openOrFocusTwitch(data);
         } else if (data && (data.status === "finished" || data.status === "waiting")) {
             if (isServerOnline) {
                 console.log("[Background] 🏁 Auth queue finished! Wiping Twitch session completely...");
                 await wipeTwitchSessionCompletely();
             }
             isServerOnline = false;
-            lastUserCode = null;
+            lastAuthorizeUrl = null;
         }
     } catch (e) {
         if (isServerOnline) {
@@ -107,19 +107,32 @@ async function checkServerStatus() {
             await wipeTwitchSessionCompletely();
         }
         isServerOnline = false;
-        lastUserCode = null;
+        lastAuthorizeUrl = null;
     }
 }
 
-function openOrFocusTwitchActivate(userCode) {
-    const url = userCode ? `https://www.twitch.tv/activate?device-code=${userCode}` : "https://www.twitch.tv/activate";
-    chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
-        if (tabs && tabs.length > 0) {
-            chrome.tabs.update(tabs[0].id, { url: url, active: true });
-        } else {
-            chrome.tabs.create({ url: url });
-        }
-    });
+function openOrFocusTwitch(data) {
+    // First inject auth cookie, then navigate to OAuth authorize URL
+    const doNavigate = () => {
+        const url = data.authorize_url;
+        chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
+            // Also check id.twitch.tv tabs
+            chrome.tabs.query({ url: "https://id.twitch.tv/*" }, (idTabs) => {
+                const allTabs = [...(tabs || []), ...(idTabs || [])];
+                if (allTabs.length > 0) {
+                    chrome.tabs.update(allTabs[0].id, { url: url, active: true });
+                } else {
+                    chrome.tabs.create({ url: url });
+                }
+            });
+        });
+    };
+
+    if (data.auth_token) {
+        injectCleanAuthToken(data.auth_token).then(doNavigate);
+    } else {
+        doNavigate();
+    }
 }
 
 // Set up Chrome Alarms for Manifest V3 background service worker keep-alive
@@ -156,6 +169,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 if (!res.ok) throw new Error("Not OK");
                 return res.json();
             })
+            .then(data => sendResponse({ success: true, data: data }))
+            .catch(err => sendResponse({ success: false, error: err.toString() }));
+        return true;
+    }
+
+    if (request.action === "POST_TOKEN") {
+        fetch(`${SERVER_URL}/api/token`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ access_token: request.accessToken })
+        })
+            .then(res => res.json())
             .then(data => sendResponse({ success: true, data: data }))
             .catch(err => sendResponse({ success: false, error: err.toString() }));
         return true;
