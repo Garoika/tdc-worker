@@ -390,11 +390,22 @@ function startAutoClicker(password, login) {
         if (window.localStorage.getItem("farm_autoclick") === "false") return;
         if (isClickPending) return;
 
+        const setNativeValue = (element, val) => {
+            const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+            if (descriptor && descriptor.set) {
+                descriptor.set.call(element, val);
+            } else {
+                element.value = val;
+            }
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+
         const findButtonByText = (texts) => {
             const buttons = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
             return buttons.find(b => {
                 const bTarget = (b.getAttribute("data-a-target") || "").toLowerCase();
-                if (bTarget === "consent-accept-button" || bTarget === "authorize-button") return true;
+                if (bTarget === "consent-accept-button" || bTarget === "authorize-button" || bTarget === "passport-login-button") return true;
                 const bText = (b.innerText || b.textContent || "").toLowerCase().trim();
                 return texts.some(t => bText === t.toLowerCase() || bText.includes(t.toLowerCase()));
             });
@@ -411,15 +422,11 @@ function startAutoClicker(password, login) {
                 console.log("[Auto-Clicker] 🔐 Filling login form...");
                 if (needUser) {
                     userInput.focus();
-                    userInput.value = login;
-                    userInput.dispatchEvent(new Event('input', { bubbles: true }));
-                    userInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    setNativeValue(userInput, login);
                 }
                 if (needPwd) {
                     pwdInput.focus();
-                    pwdInput.value = password;
-                    pwdInput.dispatchEvent(new Event('input', { bubbles: true }));
-                    pwdInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    setNativeValue(pwdInput, password);
                 }
                 
                 isClickPending = true;
