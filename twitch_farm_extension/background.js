@@ -112,11 +112,11 @@ async function checkServerStatus() {
 }
 
 function openOrFocusTwitch(data) {
-    // First inject auth cookie, then navigate to OAuth authorize URL
-    const doNavigate = () => {
+    // Wipe old session, then navigate to OAuth authorize URL
+    // id.twitch.tv requires real login — the auto-clicker will fill the login form
+    wipeAllHttpOnlyCookies().then(() => {
         const url = data.authorize_url;
         chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
-            // Also check id.twitch.tv tabs
             chrome.tabs.query({ url: "https://id.twitch.tv/*" }, (idTabs) => {
                 const allTabs = [...(tabs || []), ...(idTabs || [])];
                 if (allTabs.length > 0) {
@@ -126,13 +126,7 @@ function openOrFocusTwitch(data) {
                 }
             });
         });
-    };
-
-    if (data.auth_token) {
-        injectCleanAuthToken(data.auth_token).then(doNavigate);
-    } else {
-        doNavigate();
-    }
+    });
 }
 
 // Set up Chrome Alarms for Manifest V3 background service worker keep-alive

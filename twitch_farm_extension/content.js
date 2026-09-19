@@ -293,16 +293,15 @@ async function handleAccountFlow() {
             const activeSession = await getActiveSession();
             const sessionKey = data.login || data.index;
 
-            // New auth session — wipe, inject cookie, navigate to OAuth
+            // New auth session — wipe everything and navigate to OAuth
             if (activeSession !== sessionKey) {
-                console.log(`[Extension] 🚀 Native HttpOnly Cookie Wipe & Setup for Acc #${data.index}...`);
+                console.log(`[Extension] 🚀 Wiping session for OAuth login of Acc #${data.index}...`);
                 
                 // Back up extension state
                 const acState = window.localStorage.getItem("farm_autoclick");
                 const panelL = window.localStorage.getItem("farm_panel_left");
                 const panelT = window.localStorage.getItem("farm_panel_top");
                 
-                // CRITICAL: Clear localStorage before wiping so Twitch doesn't detect a session mismatch!
                 window.localStorage.clear();
                 window.sessionStorage.clear();
                 
@@ -311,9 +310,8 @@ async function handleAccountFlow() {
                 if (panelL !== null) window.localStorage.setItem("farm_panel_left", panelL);
                 if (panelT !== null) window.localStorage.setItem("farm_panel_top", panelT);
                 
-                chrome.runtime.sendMessage({ action: "WIPE_AND_INJECT", authToken: data.auth_token }, async () => {
+                chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, async () => {
                     await setActiveSession(sessionKey);
-                    // Navigate to OAuth authorize URL
                     window.location.href = data.authorize_url;
                 });
                 return;
@@ -405,6 +403,39 @@ function startAutoClicker(password, login) {
         const pwdInput = document.querySelector('input[type="password"]');
         const userInput = document.querySelector('input[autocomplete="username"], input[id="login-username"]') || (pwdInput && pwdInput.form ? pwdInput.form.querySelector('input[type="text"]') : null);
         
+        // Full login form (username + password) — for OAuth flow via twitch.tv/login
+        if (pwdInput && userInput && document.body.contains(pwdInput) && document.body.contains(userInput)) {
+            const needUser = login && userInput.value !== login;
+            const needPwd = password && pwdInput.value !== password;
+            if (needUser || needPwd) {
+                console.log("[Auto-Clicker] 🔐 Filling login form...");
+                if (needUser) {
+                    userInput.focus();
+                    userInput.value = login;
+                    userInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    userInput.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                if (needPwd) {
+                    pwdInput.focus();
+                    pwdInput.value = password;
+                    pwdInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    pwdInput.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                
+                isClickPending = true;
+                setTimeout(() => {
+                    const loginBtn = findButtonByText(["Log In", "Войти", "Login"]);
+                    if (loginBtn && !loginBtn.disabled) {
+                        console.log("[Auto-Clicker] 👉 Clicking Log In...");
+                        loginBtn.click();
+                    }
+                    isClickPending = false;
+                }, Math.floor(Math.random() * 500) + 500);
+            }
+            return;
+        }
+
+        // Password-only verification (e.g. "confirm password" step)
         if (pwdInput && !userInput && document.body.contains(pwdInput)) {
             if (pwdInput.value !== password && password) {
                 console.log("[Auto-Clicker] 🔑 Typing password for Verification...");
