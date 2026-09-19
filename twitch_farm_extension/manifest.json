@@ -18,7 +18,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.twitch.tv/*", "https://id.twitch.tv/*"],
+      "matches": ["https://*.twitch.tv/*"],
       "js": ["content.js"],
       "run_at": "document_start"
     }

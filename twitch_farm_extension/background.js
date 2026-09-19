@@ -72,7 +72,7 @@ async function wipeTwitchSessionCompletely() {
     });
 }
 
-let lastAuthorizeUrl = null;
+let lastUserCode = null;
 
 async function checkServerStatus() {
     try {
@@ -83,23 +83,23 @@ async function checkServerStatus() {
                 await wipeTwitchSessionCompletely();
             }
             isServerOnline = false;
-            lastAuthorizeUrl = null;
+            lastUserCode = null;
             return;
         }
         const data = await res.json();
         
-        if (data && data.authorize_url && data.authorize_url !== lastAuthorizeUrl) {
-            lastAuthorizeUrl = data.authorize_url;
+        if (data && data.user_code && data.user_code !== lastUserCode) {
+            lastUserCode = data.user_code;
             isServerOnline = true;
-            console.log(`[Background] 🚀 New OAuth auth detected for: ${data.login || data.index}`);
-            openOrFocusTwitch(data);
+            console.log(`[Background] 🚀 New auth code detected: ${data.user_code}`);
+            openOrFocusTwitchActivate(data.user_code);
         } else if (data && (data.status === "finished" || data.status === "waiting")) {
             if (isServerOnline) {
                 console.log("[Background] 🏁 Auth queue finished! Wiping Twitch session completely...");
                 await wipeTwitchSessionCompletely();
             }
             isServerOnline = false;
-            lastAuthorizeUrl = null;
+            lastUserCode = null;
         }
     } catch (e) {
         if (isServerOnline) {
@@ -107,25 +107,18 @@ async function checkServerStatus() {
             await wipeTwitchSessionCompletely();
         }
         isServerOnline = false;
-        lastAuthorizeUrl = null;
+        lastUserCode = null;
     }
 }
 
-function openOrFocusTwitch(data) {
-    // Wipe old session, then navigate to OAuth authorize URL
-    // id.twitch.tv requires real login — the auto-clicker will fill the login form
-    wipeAllHttpOnlyCookies().then(() => {
-        const url = data.authorize_url;
-        chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
-            chrome.tabs.query({ url: "https://id.twitch.tv/*" }, (idTabs) => {
-                const allTabs = [...(tabs || []), ...(idTabs || [])];
-                if (allTabs.length > 0) {
-                    chrome.tabs.update(allTabs[0].id, { url: url, active: true });
-                } else {
-                    chrome.tabs.create({ url: url });
-                }
-            });
-        });
+function openOrFocusTwitchActivate(userCode) {
+    const url = userCode ? `https://www.twitch.tv/activate?device-code=${userCode}` : "https://www.twitch.tv/activate";
+    chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
+        if (tabs && tabs.length > 0) {
+            chrome.tabs.update(tabs[0].id, { url: url, active: true });
+        } else {
+            chrome.tabs.create({ url: url });
+        }
     });
 }
 
@@ -140,29 +133,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // Also check immediately when background service worker wakes up
 checkServerStatus();
 setInterval(checkServerStatus, 2000);
-
-// Monitor tab URLs for OAuth redirect containing #access_token=
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    const targetUrl = changeInfo.url || (tab && tab.url);
-    if (targetUrl && targetUrl.includes("access_token=")) {
-        console.log("[Background] 🎯 Captured access_token from tab URL:", targetUrl);
-        const match = targetUrl.match(/access_token=([a-zA-Z0-9]+)/);
-        if (match && match[1]) {
-            const token = match[1];
-            fetch(`${SERVER_URL}/api/token`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ access_token: token })
-            })
-            .then(res => res.json())
-            .then(data => {
-                console.log("[Background] ✅ Token sent to auth server via tab listener!");
-                chrome.tabs.update(tabId, { url: "https://www.twitch.tv/" });
-            })
-            .catch(err => console.error("[Background] ❌ Failed to post token from tab listener:", err));
-        }
-    }
-});
 
 // Listen for messages from content.js
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -186,18 +156,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 if (!res.ok) throw new Error("Not OK");
                 return res.json();
             })
-            .then(data => sendResponse({ success: true, data: data }))
-            .catch(err => sendResponse({ success: false, error: err.toString() }));
-        return true;
-    }
-
-    if (request.action === "POST_TOKEN") {
-        fetch(`${SERVER_URL}/api/token`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ access_token: request.accessToken })
-        })
-            .then(res => res.json())
             .then(data => sendResponse({ success: true, data: data }))
             .catch(err => sendResponse({ success: false, error: err.toString() }));
         return true;

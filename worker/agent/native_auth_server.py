@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger('worker.native_auth')
 logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 
-CLIENT_ID = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+CLIENT_ID = "ue6666qo983tsx6so1t0vnawi233wa"
 SCOPES = "channel_read chat:read user_blocks_edit user_blocks_read user_follows_edit user_read"
 
 class NativeAuthService:
@@ -18,11 +18,8 @@ class NativeAuthService:
         self.site: Optional[web.TCPSite] = None
         self.current_auth_state: Dict[str, Any] = {}
         self.is_running = False
-        self._token_received: Optional[asyncio.Event] = None
-        self._received_token: Optional[str] = None
 
         self.app.router.add_route('*', '/api/current', self._handle_current)
-        self.app.router.add_route('*', '/api/token', self._handle_token)
         self.app.router.add_route('OPTIONS', '/{tail:.*}', self._handle_cors)
 
     async def start(self):
@@ -58,50 +55,76 @@ class NativeAuthService:
             return origin
         return "http://127.0.0.1"
 
-    def _cors_headers(self, request: web.Request) -> dict:
-        return {
+    async def _handle_cors(self, request: web.Request):
+        return web.Response(
+            status=200,
+            headers={
+                "Access-Control-Allow-Origin": self._cors_origin(request),
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type"
+            }
+        )
+
+    async def _handle_current(self, request: web.Request):
+        if request.method == "OPTIONS":
+            return await self._handle_cors(request)
+
+        headers = {
             "Access-Control-Allow-Origin": self._cors_origin(request),
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
             "Cache-Control": "no-store, no-cache, must-revalidate"
         }
 
-    async def _handle_cors(self, request: web.Request):
-        return web.Response(status=200, headers=self._cors_headers(request))
-
-    async def _handle_current(self, request: web.Request):
-        if request.method == "OPTIONS":
-            return await self._handle_cors(request)
-
-        headers = self._cors_headers(request)
-
         if not self.current_auth_state:
             return web.json_response({"status": "waiting"}, headers=headers)
 
         return web.json_response(self.current_auth_state, headers=headers)
 
-    async def _handle_token(self, request: web.Request):
-        """Receive access_token from Chrome extension after OAuth redirect."""
-        if request.method == "OPTIONS":
-            return await self._handle_cors(request)
+    async def get_device_code(self, session: aiohttp.ClientSession) -> dict:
+        """Request new device code from Twitch OAuth API."""
+        url = "https://id.twitch.tv/oauth2/device"
+        data = aiohttp.FormData()
+        data.add_field("client_id", CLIENT_ID)
+        data.add_field("scopes", SCOPES)
 
-        headers = self._cors_headers(request)
+        async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise Exception(f"Failed to get device code from Twitch: {resp.status} - {text}")
+            return await resp.json()
 
-        try:
-            body = await request.json()
-            token = body.get("access_token", "").strip()
-        except Exception:
-            return web.json_response({"error": "invalid body"}, status=400, headers=headers)
+    async def poll_token(self, session: aiohttp.ClientSession, device_code: str, timeout_seconds: int = 600, cancel_event: asyncio.Event = None) -> str:
+        """Poll Twitch OAuth token endpoint until user authorizes via browser."""
+        url = "https://id.twitch.tv/oauth2/token"
+        start_time = asyncio.get_event_loop().time()
 
-        if not token:
-            return web.json_response({"error": "missing access_token"}, status=400, headers=headers)
+        while asyncio.get_event_loop().time() - start_time < timeout_seconds:
+            if cancel_event and cancel_event.is_set():
+                raise asyncio.CancelledError("Auth cancelled by user")
 
-        self._received_token = token
-        if self._token_received:
-            self._token_received.set()
+            await asyncio.sleep(2.5)
 
-        logger.info("🔑 Access token received from Chrome extension")
-        return web.json_response({"ok": True}, headers=headers)
+            data = aiohttp.FormData()
+            data.add_field("client_id", CLIENT_ID)
+            data.add_field("device_code", device_code)
+            data.add_field("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+
+            try:
+                async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        res = await resp.json()
+                        return res.get("access_token")
+                    elif resp.status in (400, 403):
+                        # Still waiting for user authorization
+                        continue
+                    else:
+                        text = await resp.text()
+                        logger.debug(f"Twitch token poll status {resp.status}: {text}")
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                continue
+
+        raise TimeoutError("Timed out waiting for Chrome extension authorization (10 min)")
 
     async def validate_token(self, session: aiohttp.ClientSession, access_token: str) -> dict:
         """Validate access token and retrieve user_id and login from Twitch."""
@@ -114,91 +137,55 @@ class NativeAuthService:
                 raise Exception(f"Failed to validate Twitch token: {resp.status} - {text}")
             return await resp.json()
 
-    def _build_authorize_url(self) -> str:
-        """Build OAuth Implicit Grant authorize URL for Android App client."""
-        import urllib.parse
-        return (
-            f"https://id.twitch.tv/oauth2/authorize"
-            f"?client_id={CLIENT_ID}"
-            f"&response_type=token"
-            f"&scope={urllib.parse.quote(SCOPES)}"
-        )
-
     async def authorize_account(
         self,
         account: dict,
         cancel_event: asyncio.Event = None
     ) -> Dict[str, str]:
         """
-        Execute OAuth Implicit Grant flow for a single account:
-        1. Set state with authorize_url for Chrome extension
-        2. Wait for extension to POST access_token to /api/token
-        3. Validate token and return client_secret + twitch_user_id
+        Execute full Device Code flow for a single account:
+        1. Get device code
+        2. Set state for Chrome extension on port 5000
+        3. Poll Twitch until approved
+        4. Validate token and return client_secret + twitch_user_id
         """
         login = account.get('login', '')
         auth_token = account.get('auth_token', '')
         password = account.get('password', '')
 
-        self._token_received = asyncio.Event()
-        self._received_token = None
-
-        authorize_url = self._build_authorize_url()
-
-        logger.info(f"🔑 OAuth auth requested for {login}")
-
-        # Expose to Chrome Extension
-        self.current_auth_state = {
-            "index": login,
-            "login": login,
-            "password": password,
-            "auth_token": auth_token,
-            "authorize_url": authorize_url,
-            "client_id": CLIENT_ID,
-            "state": "pending",
-            "proxy": None
-        }
-
-        # Wait for extension to send the token (up to 10 min)
-        timeout = 600
-        try:
-            if cancel_event:
-                # Wait for either token or cancellation
-                done, _ = await asyncio.wait(
-                    [
-                        asyncio.create_task(self._token_received.wait()),
-                        asyncio.create_task(cancel_event.wait()),
-                    ],
-                    timeout=timeout,
-                    return_when=asyncio.FIRST_COMPLETED
-                )
-                if cancel_event.is_set():
-                    raise asyncio.CancelledError("Auth cancelled by user")
-                if not done:
-                    raise TimeoutError("Timed out waiting for Chrome extension authorization (10 min)")
-            else:
-                await asyncio.wait_for(self._token_received.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError("Timed out waiting for Chrome extension authorization (10 min)")
-
-        access_token = self._received_token
-        if not access_token:
-            raise Exception("No access token received")
-
-        # Validate token
         async with aiohttp.ClientSession() as session:
+            # 1. Request device code
+            device_data = await self.get_device_code(session)
+            device_code = device_data.get("device_code")
+            user_code = device_data.get("user_code")
+
+            logger.info(f"🔑 Auth requested for {login} | User Code: {user_code}")
+
+            # 2. Expose to Chrome Extension
+            self.current_auth_state = {
+                "index": login,
+                "password": password,
+                "auth_token": auth_token,
+                "device_code": device_code,
+                "user_code": user_code,
+                "client_id": CLIENT_ID,
+                "state": "pending",
+                "proxy": None
+            }
+
+            # 3. Poll for approval
+            access_token = await self.poll_token(session, device_code, cancel_event=cancel_event)
+
+            # 4. Validate token
             val_data = await self.validate_token(session, access_token)
             twitch_user_id = val_data.get("user_id", "")
             confirmed_login = val_data.get("login", login)
-            token_client_id = val_data.get("client_id", "")
 
-            if token_client_id != CLIENT_ID:
-                logger.warning(f"⚠️ Token client_id mismatch: got {token_client_id}, expected {CLIENT_ID}")
+            # Clear state
+            self.current_auth_state = {"status": "finished"}
 
-        # Clear state
-        self.current_auth_state = {"status": "finished"}
-
-        return {
-            "client_secret": access_token,
-            "twitch_user_id": str(twitch_user_id),
-            "login": confirmed_login
-        }
+            return {
+                "client_secret": access_token,
+                "twitch_user_id": str(twitch_user_id),
+                "login": confirmed_login
+            }
