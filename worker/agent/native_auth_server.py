@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger('worker.native_auth')
 logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 
-CLIENT_ID = "ue6666qo983tsx6so1t0vnawi233wa"
+CLIENT_ID = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
 SCOPES = "channel_read chat:read user_blocks_edit user_blocks_read user_follows_edit user_read"
 
 class NativeAuthService:
