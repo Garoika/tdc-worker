@@ -404,6 +404,7 @@ function startAutoClicker(password, login) {
         const findButtonByText = (texts) => {
             const buttons = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
             return buttons.find(b => {
+                if (b.closest("#farm-helper-panel")) return false;
                 const bTarget = (b.getAttribute("data-a-target") || "").toLowerCase();
                 if (bTarget === "consent-accept-button" || bTarget === "authorize-button" || bTarget === "passport-login-button") return true;
                 const bText = (b.innerText || b.textContent || "").toLowerCase().trim();
@@ -463,9 +464,9 @@ function startAutoClicker(password, login) {
             return;
         }
 
-        const remindBtn = findButtonByText(["Remind me later", "Напомнить позже"]);
+        const remindBtn = findButtonByText(["Remind me later", "Напомнить позже", "Пропустить", "Skip"]);
         if (remindBtn && !remindBtn.disabled && remindBtn.getAttribute("aria-disabled") !== "true") {
-            console.log("[Auto-Clicker] 👉 Clicking Remind me later...");
+            console.log("[Auto-Clicker] 👉 Clicking Skip / Remind me later...");
             isClickPending = true;
             setTimeout(() => {
                 if (document.body.contains(remindBtn)) {
