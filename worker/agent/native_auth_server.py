@@ -8,7 +8,7 @@ logger = logging.getLogger('worker.native_auth')
 logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 
 CLIENT_ID = "r8s4dac0uhzifbpu9sjdiwzctle17ff"
-SCOPES = "channel_read chat:read user_blocks_edit user_blocks_read user_follows_edit user_read user_entitlements_read user_subscriptions user_presence_friends_read"
+SCOPES = "channel_read chat:read user_blocks_edit user_blocks_read user_follows_edit user_read"
 
 class NativeAuthService:
     def __init__(self, port: int = 5000):
