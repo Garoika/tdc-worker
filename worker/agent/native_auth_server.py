@@ -116,12 +116,13 @@ class NativeAuthService:
 
     def _build_authorize_url(self) -> str:
         """Build OAuth Implicit Grant authorize URL for Android App client."""
+        import urllib.parse
         return (
             f"https://id.twitch.tv/oauth2/authorize"
             f"?client_id={CLIENT_ID}"
-            f"&redirect_uri=https://id.twitch.tv/oauth2/authorize"
+            f"&redirect_uri=https://www.twitch.tv"
             f"&response_type=token"
-            f"&scope={SCOPES}"
+            f"&scope={urllib.parse.quote(SCOPES)}"
         )
 
     async def authorize_account(
