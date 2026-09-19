@@ -1,9 +1,10 @@
 const SERVER_URL = "http://127.0.0.1:5000";
 let isServerOnline = false;
+let lastAccount = null;
 
-console.log("%c[Twitch Farm Background] 🚀 Service worker initialized", "color: #9146FF; font-weight: bold;");
+console.log("%c[Twitch Farm Background] 🚀 Service worker initialized (Android OAuth Flow)", "color: #9146FF; font-weight: bold;");
 
-// Completely wipe ALL Twitch cookies across all subdomains (including httpOnly cookies like persistent, sudo, etc.)
+// Completely wipe ALL Twitch cookies across all subdomains
 async function wipeAllHttpOnlyCookies() {
     return new Promise((resolve) => {
         chrome.cookies.getAll({ domain: "twitch.tv" }, (cookies) => {
@@ -47,7 +48,7 @@ async function injectCleanAuthToken(authToken) {
                 path: "/",
                 secure: true,
                 expirationDate: Math.floor(Date.now() / 1000) + 31536000
-            }, (cookie) => {
+            }, () => {
                 if (chrome.runtime.lastError) {}
                 res();
             });
@@ -55,13 +56,10 @@ async function injectCleanAuthToken(authToken) {
     }
 }
 
-
-
 async function wipeTwitchSessionCompletely() {
     console.log("%c[Background] 🧹 Wiping Twitch cookies, localStorage and session completely...", "color: #ff4757; font-weight: bold;");
     await wipeAllHttpOnlyCookies();
     
-    // Clear storage and remove helper panels in all open Twitch tabs
     chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
         if (!tabs || tabs.length === 0) return;
         tabs.forEach((tab) => {
@@ -72,7 +70,15 @@ async function wipeTwitchSessionCompletely() {
     });
 }
 
-let lastUserCode = null;
+function openOrFocusTwitchOAuth(authUrl) {
+    chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
+        if (tabs && tabs.length > 0) {
+            chrome.tabs.update(tabs[0].id, { url: authUrl, active: true });
+        } else {
+            chrome.tabs.create({ url: authUrl });
+        }
+    });
+}
 
 async function checkServerStatus() {
     try {
@@ -83,23 +89,31 @@ async function checkServerStatus() {
                 await wipeTwitchSessionCompletely();
             }
             isServerOnline = false;
-            lastUserCode = null;
+            lastAccount = null;
             return;
         }
         const data = await res.json();
         
-        if (data && data.user_code && data.user_code !== lastUserCode) {
-            lastUserCode = data.user_code;
-            isServerOnline = true;
-            console.log(`[Background] 🚀 New auth code detected: ${data.user_code}`);
-            openOrFocusTwitchActivate(data.user_code);
+        if (data && data.status === "pending" && data.auth_url) {
+            const currentLogin = data.login || data.index;
+            if (currentLogin !== lastAccount) {
+                lastAccount = currentLogin;
+                isServerOnline = true;
+                console.log(`[Background] 🚀 New account for Android OAuth: ${currentLogin}`);
+                
+                // Set clean cookie and navigate to Twitch OAuth authorize page
+                if (data.auth_token) {
+                    await injectCleanAuthToken(data.auth_token);
+                }
+                openOrFocusTwitchOAuth(data.auth_url);
+            }
         } else if (data && (data.status === "finished" || data.status === "waiting")) {
             if (isServerOnline) {
                 console.log("[Background] 🏁 Auth queue finished! Wiping Twitch session completely...");
                 await wipeTwitchSessionCompletely();
             }
             isServerOnline = false;
-            lastUserCode = null;
+            lastAccount = null;
         }
     } catch (e) {
         if (isServerOnline) {
@@ -107,19 +121,8 @@ async function checkServerStatus() {
             await wipeTwitchSessionCompletely();
         }
         isServerOnline = false;
-        lastUserCode = null;
+        lastAccount = null;
     }
-}
-
-function openOrFocusTwitchActivate(userCode) {
-    const url = userCode ? `https://www.twitch.tv/activate?device-code=${userCode}` : "https://www.twitch.tv/activate";
-    chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
-        if (tabs && tabs.length > 0) {
-            chrome.tabs.update(tabs[0].id, { url: url, active: true });
-        } else {
-            chrome.tabs.create({ url: url });
-        }
-    });
 }
 
 // Set up Chrome Alarms for Manifest V3 background service worker keep-alive
@@ -130,7 +133,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     }
 });
 
-// Also check immediately when background service worker wakes up
+// Check immediately when background wakes up
 checkServerStatus();
 setInterval(checkServerStatus, 2000);
 
@@ -149,11 +152,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     }
+
+    if (request.action === "SEND_TOKEN") {
+        fetch(`${SERVER_URL}/api/token`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ access_token: request.accessToken, login: request.login || "" })
+        })
+        .then(res => res.json())
+        .then(data => sendResponse({ success: true, data: data }))
+        .catch(err => sendResponse({ success: false, error: err.toString() }));
+        return true;
+    }
     
     if (request.action === "FETCH_API") {
-        fetch(`${SERVER_URL}${request.endpoint}`, { cache: "no-store" })
+        const method = request.method || "GET";
+        const options = { method, cache: "no-store" };
+        if (request.body) {
+            options.headers = { "Content-Type": "application/json" };
+            options.body = JSON.stringify(request.body);
+        }
+        fetch(`${SERVER_URL}${request.endpoint}`, options)
             .then(res => {
-                if (!res.ok) throw new Error("Not OK");
+                if (!res.ok) throw new Error("Not OK: " + res.status);
                 return res.json();
             })
             .then(data => sendResponse({ success: true, data: data }))

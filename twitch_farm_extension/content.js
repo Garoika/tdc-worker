@@ -18,13 +18,13 @@ if (chrome && chrome.runtime && chrome.runtime.onMessage) {
     });
 }
 
-function apiFetch(endpoint) {
+function apiFetch(endpoint, method = "GET", body = null) {
     return new Promise((resolve, reject) => {
         if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
             return reject(new Error("Extension context invalidated"));
         }
         try {
-            chrome.runtime.sendMessage({ action: "FETCH_API", endpoint }, (response) => {
+            chrome.runtime.sendMessage({ action: "FETCH_API", endpoint, method, body }, (response) => {
                 if (chrome.runtime.lastError) {
                     return reject(chrome.runtime.lastError);
                 }
@@ -40,21 +40,21 @@ function apiFetch(endpoint) {
     });
 }
 
-function getActiveSession() {
-    return new Promise(resolve => chrome.storage.local.get(['active_user_code'], res => resolve(res.active_user_code)));
+function getActiveAccount() {
+    return new Promise(resolve => chrome.storage.local.get(['active_account_login'], res => resolve(res.active_account_login)));
 }
 
-function setActiveSession(val) {
+function setActiveAccount(val) {
     return new Promise(resolve => {
-        if (val === null) chrome.storage.local.remove('active_user_code', resolve);
-        else chrome.storage.local.set({active_user_code: String(val)}, resolve);
+        if (val === null) chrome.storage.local.remove('active_account_login', resolve);
+        else chrome.storage.local.set({active_account_login: String(val)}, resolve);
     });
 }
 
-function renderFloatingPanel(index, password) {
+function renderFloatingPanel(login, password) {
     if (document.getElementById("farm-helper-panel")) return;
     if (!document.body) {
-        setTimeout(() => renderFloatingPanel(index, password), 200);
+        setTimeout(() => renderFloatingPanel(login, password), 200);
         return;
     }
 
@@ -82,27 +82,10 @@ function renderFloatingPanel(index, password) {
         box-shadow: 0px 4px 15px rgba(0,0,0,0.5);
     `;
 
-    function getTwitchUsername() {
-        try {
-            const match = document.cookie.match(/(?:^|;\s*)twilight-user=([^;]+)/);
-            if (match) {
-                const json = JSON.parse(decodeURIComponent(match[1]));
-                if (json && json.displayName) return json.displayName;
-                if (json && json.login) return json.login;
-            }
-        } catch(e) {}
-        return null;
-    }
-
-    let displayLogin = index;
-    if (String(index) === "0") {
-        displayLogin = getTwitchUsername() || "0";
-    }
-
     panel.innerHTML = `
         <div id="farm-panel-header" style="font-weight: bold; color: #9146FF; font-size: 15px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; cursor: move; padding-bottom: 4px; border-bottom: 1px solid #26262c;">
-            <span>✋ 🎮 Twitch Extension Helper</span>
-            <span id="farm-acc-title" style="background: #9146FF; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 10px;">Acc #${displayLogin}</span>
+            <span>✋ 🎮 Twitch Android OAuth Helper</span>
+            <span id="farm-acc-title" style="background: #9146FF; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 10px;">${login || 'Acc'}</span>
         </div>
         <div style="font-size: 12px; color: #adadb8; margin-top: 8px; margin-bottom: 6px;">Пароль от этого аккаунта:</div>
         <div style="display: flex; gap: 8px; margin-bottom: 10px;">
@@ -119,6 +102,7 @@ function renderFloatingPanel(index, password) {
                 ⏭️ Скипнуть этот аккаунт
             </button>
         </div>
+        <div id="farm-status-msg" style="font-size: 12px; color: #2cf6b3; margin-top: 8px; text-align: center; font-weight: bold; display: none;"></div>
         <div style="font-size: 11px; color: #adadb8; margin-top: 8px; text-align: center;">
             💡 <i>Зажми заголовок, чтобы перетащить карточку!</i>
         </div>
@@ -126,7 +110,7 @@ function renderFloatingPanel(index, password) {
 
     document.body.appendChild(panel);
 
-    // Make floating panel Draggable by dragging the header
+    // Draggable
     const header = document.getElementById("farm-panel-header");
     let isDragging = false;
     let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
@@ -184,7 +168,6 @@ function renderFloatingPanel(index, password) {
     copyBtn.onclick = doCopy;
 
     const autoclickBtn = document.getElementById("farm-autoclick-btn");
-    // Default to true if not explicitly "false"
     let isAutoClick = localStorage.getItem("farm_autoclick") !== "false";
     
     const updateAutoClickBtn = () => {
@@ -207,14 +190,14 @@ function renderFloatingPanel(index, password) {
     };
 
     skipBtn.onclick = async () => {
-        if (confirm(`Пропустить аккаунт #${index} и перейти к следующему?`)) {
+        if (confirm(`Пропустить аккаунт ${login} и перейти к следующему?`)) {
             skipBtn.innerText = "Пропускаем...";
             skipBtn.disabled = true;
             try {
-                await apiFetch('/api/skip');
-                await setActiveSession(null);
+                await apiFetch('/api/skip', 'POST');
+                await setActiveAccount(null);
                 chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                    window.location.href = "https://www.twitch.tv/activate";
+                    window.location.reload();
                 });
             } catch (e) {
                 alert("Ошибка пропуска аккаунта: " + e);
@@ -223,109 +206,107 @@ function renderFloatingPanel(index, password) {
     };
 }
 
+async function checkAndSendAccessToken(currentLogin) {
+    if (window.location.hash && window.location.hash.includes("access_token=")) {
+        const hash = window.location.hash.substring(1);
+        const params = new URLSearchParams(hash);
+        const accessToken = params.get("access_token");
+
+        if (accessToken) {
+            console.log("%c[Extension] 🔑 Access token detected in URL hash!", "color: #2cf6b3; font-weight: bold; font-size: 14px;");
+            
+            const statusElem = document.getElementById("farm-status-msg");
+            if (statusElem) {
+                statusElem.style.display = "block";
+                statusElem.innerText = "✅ Токен получен! Отправляем на сервер...";
+            }
+
+            chrome.runtime.sendMessage({
+                action: "SEND_TOKEN",
+                accessToken: accessToken,
+                login: currentLogin || ""
+            }, (response) => {
+                console.log("[Extension] Token response from server:", response);
+                if (statusElem) {
+                    statusElem.innerText = "✨ Токен сохранён! Переходим к следующему...";
+                }
+                history.replaceState(null, null, window.location.pathname + window.location.search);
+            });
+            return true;
+        }
+    }
+    return false;
+}
+
 async function handleAccountFlow() {
-    console.log("%c[Twitch Farm Helper] 🚀 Extension active on page", "color: #9146FF; font-weight: bold; font-size: 12px;");
+    console.log("%c[Twitch Farm Helper] 🚀 Extension active on page (Android OAuth)", "color: #9146FF; font-weight: bold; font-size: 12px;");
     try {
-        // Check if server is active FIRST before doing any redirects or script execution
         const data = await apiFetch('/api/current');
 
         if (!data || data.status === "finished" || data.status === "waiting") {
-            console.log("[Twitch Farm Helper] ℹ️ Auth server not active (waiting for worker queue...)");
+            console.log("[Twitch Farm Helper] ℹ️ Auth server not active");
             return;
         }
 
-        console.log(`%c[Twitch Farm Helper] 🟢 Auth Server Connected! Account: ${data.login || data.index}, UserCode: ${data.user_code}`, "color: #2cf6b3; font-weight: bold; font-size: 13px;");
+        const currentLogin = data.login || data.index;
+        console.log(`%c[Twitch Farm Helper] 🟢 Auth Server Connected! Account: ${currentLogin}, Status: ${data.status}`, "color: #2cf6b3; font-weight: bold; font-size: 13px;");
 
-        // Only redirect when server is running and processing an account
-        if (window.location.pathname.includes("/settings/connections") || window.location.pathname.includes("/settings")) {
-            console.log("[Extension] 🎯 Landed on settings page! Waiting for PowerShell to advance to the next account...");
-            
-            const currentSession = await getActiveSession();
-            await setActiveSession(null);
-            
-            // We must wait for the old C# container to be killed and the new one to start
-            setInterval(async () => {
-                try {
-                    const nextData = await apiFetch('/api/current');
-                    if (nextData && nextData.user_code && nextData.user_code !== currentSession) {
-                        console.log("[Extension] New container detected! Proceeding...");
-                        chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                            window.location.href = "https://www.twitch.tv/activate";
-                        });
-                    }
-                } catch(e) {
-                    // Server is offline (container killed by PS script). Just wait.
-                }
-            }, 2000);
+        // 1. Check if we just received access_token in the redirect URL hash!
+        const tokenSent = await checkAndSendAccessToken(currentLogin);
+        if (tokenSent) {
             return;
         }
 
-        if (data.auth_token && data.user_code) {
-            
-            // If we somehow landed on /activate without the device-code in the URL, force a redirect!
-            if (window.location.pathname === "/activate" && !window.location.search) {
-                window.location.href = `https://www.twitch.tv/activate?device-code=${data.user_code}`;
-                return;
-            }
+        if (data.status === "authorized") {
+            console.log(`[Extension] ✅ Account ${currentLogin} authorized! Wiping session and preparing next...`);
+            await setActiveAccount(null);
+            chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
+                setTimeout(() => window.location.reload(), 1500);
+            });
+            return;
+        }
 
-            const activeSession = await getActiveSession();
-            
-            // If the user_code is different, it's a new auth session
-            if (activeSession !== data.user_code) {
-                console.log(`[Extension] 🚀 Native HttpOnly Cookie Wipe & Setup for Acc #${data.index}...`);
+        if (data.auth_token && data.auth_url) {
+            const activeAcc = await getActiveAccount();
+
+            // New account in queue
+            if (activeAcc !== currentLogin) {
+                console.log(`[Extension] 🚀 Native HttpOnly Cookie Wipe & Setup for ${currentLogin}...`);
                 
-                // Back up extension state
                 const acState = window.localStorage.getItem("farm_autoclick");
                 const panelL = window.localStorage.getItem("farm_panel_left");
                 const panelT = window.localStorage.getItem("farm_panel_top");
                 
-                // CRITICAL: Clear localStorage before wiping so Twitch doesn't detect a session mismatch!
                 window.localStorage.clear();
                 window.sessionStorage.clear();
                 
-                // Restore extension state
                 if (acState !== null) window.localStorage.setItem("farm_autoclick", acState);
                 if (panelL !== null) window.localStorage.setItem("farm_panel_left", panelL);
                 if (panelT !== null) window.localStorage.setItem("farm_panel_top", panelT);
                 
                 chrome.runtime.sendMessage({ action: "WIPE_AND_INJECT", authToken: data.auth_token }, async () => {
-                    await setActiveSession(data.user_code);
-                    window.location.href = `https://www.twitch.tv/activate?device-code=${data.user_code}`;
+                    await setActiveAccount(currentLogin);
+                    window.location.href = data.auth_url;
                 });
                 return;
             }
 
-            renderFloatingPanel(data.login || data.index, data.password);
-            startPolling();
-            startAutoClicker(data.password, data.login || data.index);
+            renderFloatingPanel(currentLogin, data.password);
+            startPolling(currentLogin);
+            startAutoClicker(data.password, currentLogin);
         }
     } catch (e) {
-        // Server is offline: do nothing!
+        // Server offline
     }
 }
 
-function startPolling() {
+function startPolling(currentLogin) {
     const interval = setInterval(async () => {
         try {
-            if (window.location.pathname.includes("/settings/connections") || window.location.pathname.includes("/settings")) {
+            // Also check for hash in SPA transitions
+            const tokenSent = await checkAndSendAccessToken(currentLogin);
+            if (tokenSent) {
                 clearInterval(interval);
-                console.log("[Extension] 🎯 Landed on settings page (via SPA)! Waiting for PowerShell to advance to the next account...");
-                
-                const currentSession = await getActiveSession();
-                await setActiveSession(null);
-                
-                setInterval(async () => {
-                    try {
-                        const nextData = await apiFetch('/api/current');
-                        if (nextData && nextData.user_code && nextData.user_code !== currentSession) {
-                            chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                                window.location.href = "https://www.twitch.tv/activate";
-                            });
-                        }
-                    } catch(e) {
-                        // wait
-                    }
-                }, 2000);
                 return;
             }
 
@@ -333,71 +314,22 @@ function startPolling() {
             try {
                 data = await apiFetch('/api/current');
             } catch (e) {
-                // Server offline / restarting
                 return;
             }
             if (!data) return;
-            
-            // 1. Check if we are fully logged in
-            const domLoginElem = document.querySelector('[data-a-target="user-display-name"]');
-            
-            // Use robust data attribute for login button, fallback to text
-            const loginBtn = document.querySelector('[data-a-target="login-button"]') || Array.from(document.querySelectorAll('button, a')).find(b => {
-                const t = (b.innerText || "").toLowerCase().trim();
-                return t === "log in" || t === "войти";
-            });
 
-            // If we see a login button and no user name, we are logged out.
-            // (We cannot check expectedLogin because the C# server doesn't provide it reliably)
-            if (!domLoginElem && loginBtn) {
-                console.log("[Extension] ⚠️ Auth failed or logged out! Wiping and retrying...");
+            if (data.status === "authorized") {
                 clearInterval(interval);
-                
-                const acState = window.localStorage.getItem("farm_autoclick");
-                const panelL = window.localStorage.getItem("farm_panel_left");
-                const panelT = window.localStorage.getItem("farm_panel_top");
-                
-                window.localStorage.clear();
-                window.sessionStorage.clear();
-                
-                if (acState !== null) window.localStorage.setItem("farm_autoclick", acState);
-                if (panelL !== null) window.localStorage.setItem("farm_panel_left", panelL);
-                if (panelT !== null) window.localStorage.setItem("farm_panel_top", panelT);
-                
-                await setActiveSession(null);
+                console.log(`[Extension] ✅ Account ${currentLogin} authorized! Moving next...`);
+                await setActiveAccount(null);
                 chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                    window.location.href = `https://www.twitch.tv/activate?device-code=${data.user_code}`;
-                });
-                return;
-            }
-
-            // Fix Acc #0 display by pulling from cookie if not updated yet
-            const titleElem = document.getElementById('farm-acc-title');
-            if (titleElem && titleElem.innerText.includes("Acc #0")) {
-                const match = document.cookie.match(/(?:^|;\s*)twilight-user=([^;]+)/);
-                if (match) {
-                    try {
-                        const json = JSON.parse(decodeURIComponent(match[1]));
-                        if (json && (json.displayName || json.login)) {
-                            titleElem.innerText = `Acc #${json.displayName || json.login}`;
-                        }
-                    } catch(e) {}
-                }
-            }
-
-            // 2. Standard polling logic
-            if (data.status === "authorized" || data.status === "skipped") {
-                clearInterval(interval);
-                console.log(`[Extension] ✅ Account #${data.index || ''} ${data.status}! Moving next...`);
-                await setActiveSession(null);
-                chrome.runtime.sendMessage({ action: "WIPE_ONLY" }, () => {
-                    window.location.href = "https://www.twitch.tv/activate";
+                    setTimeout(() => window.location.reload(), 1000);
                 });
             }
         } catch (e) {
             console.error("[Extension] Poll error:", e);
         }
-    }, 2000);
+    }, 1500);
 }
 
 let autoclickInterval = null;
@@ -411,15 +343,21 @@ function startAutoClicker(password, login) {
         if (isClickPending) return;
 
         const findButtonByText = (texts) => {
-            const buttons = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
+            const buttons = Array.from(document.querySelectorAll('button, a, div[role="button"], input[type="submit"]'));
             return buttons.find(b => {
                 const bTarget = (b.getAttribute("data-a-target") || "").toLowerCase();
-                if (bTarget === "consent-accept-button" || bTarget === "authorize-button") return true;
-                const bText = (b.innerText || b.textContent || "").toLowerCase().trim();
+                if (
+                    bTarget === "passport-oauth-authorize-button" || 
+                    bTarget === "authorize-button" || 
+                    bTarget.includes("authorize") || 
+                    bTarget === "consent-accept-button"
+                ) return true;
+                const bText = (b.innerText || b.value || b.textContent || "").toLowerCase().trim();
                 return texts.some(t => bText === t.toLowerCase() || bText.includes(t.toLowerCase()));
             });
         };
 
+        // 1. Check for Password input (if Twitch prompts for password confirmation)
         const pwdInput = document.querySelector('input[type="password"]');
         const userInput = document.querySelector('input[autocomplete="username"], input[id="login-username"]') || (pwdInput && pwdInput.form ? pwdInput.form.querySelector('input[type="text"]') : null);
         
@@ -432,70 +370,36 @@ function startAutoClicker(password, login) {
                 
                 isClickPending = true;
                 setTimeout(() => {
-                    const verifyBtn = findButtonByText(["Verify", "Подтвердить", "Confirm"]);
+                    const verifyBtn = findButtonByText(["Verify", "Подтвердить", "Confirm", "Log In", "Войти"]);
                     if (verifyBtn && !verifyBtn.disabled) {
                         console.log("[Auto-Clicker] 👉 Clicking Verify...");
                         verifyBtn.click();
                     }
                     isClickPending = false;
-                }, Math.floor(Math.random() * 400) + 400);
+                }, 500);
             }
             return;
         }
 
-        const activateBtn = findButtonByText(["Activate", "Активировать"]);
-        if (activateBtn && !activateBtn.disabled && activateBtn.getAttribute("aria-disabled") !== "true") {
-            console.log("[Auto-Clicker] 👉 Found Activate button. Clicking...");
+        // 2. Check for OAuth Authorize / Connect button
+        const authBtn = findButtonByText([
+            "Authorize", "Разрешить", "Accept", "Connect", "Подтвердить", "Allow"
+        ]);
+        if (authBtn && !authBtn.disabled && authBtn.getAttribute("aria-disabled") !== "true") {
+            console.log("[Auto-Clicker] 👉 Found OAuth Authorize button. Clicking...", authBtn);
             isClickPending = true;
             setTimeout(() => {
-                if (document.body.contains(activateBtn)) {
-                    activateBtn.focus();
-                    activateBtn.click();
-                }
+                authBtn.click();
                 isClickPending = false;
-            }, Math.floor(Math.random() * 400) + 400);
+            }, 600);
             return;
-        }
-
-        const remindBtn = findButtonByText(["Remind me later", "Напомнить позже"]);
-        if (remindBtn && !remindBtn.disabled && remindBtn.getAttribute("aria-disabled") !== "true") {
-            console.log("[Auto-Clicker] 👉 Clicking Remind me later...");
-            isClickPending = true;
-            setTimeout(() => {
-                if (document.body.contains(remindBtn)) {
-                    remindBtn.click();
-                }
-                isClickPending = false;
-            }, Math.floor(Math.random() * 400) + 400);
-            return;
-        }
-
-        const authBtn = findButtonByText(["Authorize", "Разрешить", "Allow", "Consent", "Подтвердить"]);
-        if (authBtn) {
-            window.dispatchEvent(new Event('focus', { bubbles: true }));
-            document.dispatchEvent(new Event('focus', { bubbles: true }));
-            
-            if (!authBtn.disabled && authBtn.getAttribute("aria-disabled") !== "true") {
-                console.log("[Auto-Clicker] 🎯 Found Authorize button! Triggering click...");
-                isClickPending = true;
-                setTimeout(() => {
-                    if (document.body.contains(authBtn)) {
-                        authBtn.focus();
-                        authBtn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
-                        authBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-                        authBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-                        authBtn.click();
-                    }
-                    isClickPending = false;
-                }, Math.floor(Math.random() * 300) + 300);
-                return;
-            } else {
-                console.log("[Auto-Clicker] Authorize button is disabled, enabling...");
-                authBtn.removeAttribute('disabled');
-                authBtn.setAttribute('aria-disabled', 'false');
-            }
         }
     }, 1000);
 }
 
-handleAccountFlow();
+// Kick off when DOM is ready
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", handleAccountFlow);
+} else {
+    handleAccountFlow();
+}
