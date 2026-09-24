@@ -40,10 +40,6 @@ if not file_config.get('worker_token') and not os.environ.get('WORKER_TOKEN'):
     if not url:
         url = "ws://185.104.248.62/ws/workers"
     
-    # Auto-fix: strip port 8000 if user entered ws://IP:8000/ws/workers (Nginx proxies on port 80)
-    if ":8000/ws/workers" in url:
-        url = url.replace(":8000/ws/workers", "/ws/workers")
-        print(f"[INFO] Fixed port 8000 -> Nginx URL: {url}", flush=True)
         
     print("\nPlease register a worker in Dashboard -> 'Workers' tab -> 'Register Worker'.", flush=True)
     token = prompt_user("Enter Worker Token (wt_...): ")
@@ -66,9 +62,7 @@ if not file_config.get('worker_token') and not os.environ.get('WORKER_TOKEN'):
     except Exception as e:
         print(f"[Warning] Could not save config file: {e}", flush=True)
 
-MASTER_URL = os.environ.get('MASTER_URL') or file_config.get('master_url') or 'ws://185.104.248.62/ws/workers'
-if ":8000/ws/workers" in MASTER_URL:
-    MASTER_URL = MASTER_URL.replace(":8000/ws/workers", "/ws/workers")
+MASTER_URL = os.environ.get('MASTER_URL') or file_config.get('master_url') or 'ws://192.168.1.100:5173/ws/workers'
 WORKER_TOKEN = os.environ.get('WORKER_TOKEN') or file_config.get('worker_token') or ''
 WORKER_PUBLIC_IP = os.environ.get('WORKER_PUBLIC_IP') or file_config.get('worker_public_ip') or ''
 RUNNER_TYPE = 'process'
