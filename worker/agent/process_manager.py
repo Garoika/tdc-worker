@@ -409,7 +409,10 @@ class ProcessManager:
         """Supervisor check: auto-recover if native process exited unexpectedly."""
         if self.process and self.process.poll() is not None:
             if self.active_jobs:
-                logger.warning("[ProcessManager] Process exited unexpectedly. Triggering self-healing restart...")
+                exit_code = self.process.poll()
+                last_err = list(self.log_buffer)[-5:] if self.log_buffer else ["(no logs captured)"]
+                logger.warning(f"[ProcessManager] Process exited unexpectedly with code {exit_code}. Last output:\n" + "\n".join(last_err))
+                logger.warning("[ProcessManager] Triggering self-healing restart...")
                 self._schedule_debounced_restart(delay=2.0)
 
 
