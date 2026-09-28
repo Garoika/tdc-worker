@@ -11,6 +11,7 @@ from agent.config import HEARTBEAT_INTERVAL, LOG_TAIL_LINES
 from agent.metrics import SystemMetrics
 from agent.log_streamer import LogStreamer
 from agent.native_auth_server import NativeAuthService
+from agent.process_manager import WorkerCapacityError
 from agent.state_manager import state_manager
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,11 @@ class WebSocketClient:
                     if worker_name:
                         state_manager.update_system_info(node_name=worker_name)
                         logger.info(f"Node identified as: {worker_name}")
+                    if msg.get('max_containers') is not None:
+                        await self.apply_worker_limit(msg['max_containers'])
+
+                elif msg_type == 'UPDATE_MAX_CONTAINERS':
+                    await self.apply_worker_limit(msg.get('max_containers', getattr(self.runner, 'max_containers', 50)))
 
                 elif msg_type == 'SPAWN_CONTAINER':
                     asyncio.create_task(self.handle_spawn_container(msg))
@@ -185,12 +191,32 @@ class WebSocketClient:
                     "event": "spawned"
                 })
             except Exception as e:
+                capacity_rejected = isinstance(e, WorkerCapacityError)
                 await self.send({
                     "type": "CONTAINER_EVENT",
                     "job_id": job_id,
-                    "event": "spawn_failed",
+                    "event": "capacity_rejected" if capacity_rejected else "spawn_failed",
+                    "status": "queued" if capacity_rejected else "failed",
                     "error": str(e)
                 })
+
+    async def apply_worker_limit(self, limit: int):
+        updater = getattr(self.runner, 'set_max_containers', None)
+        if not updater:
+            return
+        removed_jobs = await updater(limit)
+        for job in removed_jobs:
+            account = job.get('account', {})
+            await self.send({
+                "type": "CONTAINER_EVENT",
+                "job_id": job.get('job_id'),
+                "container_id": f"proc_{str(job.get('job_id', ''))[:8]}",
+                "account_id": account.get('id'),
+                "login": job.get('login'),
+                "event": "capacity_rejected",
+                "status": "queued",
+                "error": f"Worker account limit is {limit}; account returned to queue"
+            })
 
     async def handle_stop_container(self, msg: dict):
         cid = msg.get('container_id')
@@ -349,7 +375,6 @@ class WebSocketClient:
 
     async def heartbeat_loop(self):
         public_ip = self.auto_detect_ip()
-        sync_counter = 0
         
         while self.running and self.ws and not self.ws.closed:
             # Watchdog: ensure master server responds to heartbeats
@@ -392,15 +417,6 @@ class WebSocketClient:
                     break
 
                 await self.runner.cleanup_dead_containers()
-
-                sync_counter += 1
-                if sync_counter >= 3:
-                    sync_counter = 0
-                    containers = await self.runner.list_running_containers()
-                    await self.send({
-                        "type": "SYNC_STATE",
-                        "containers": containers
-                    })
             except Exception as e:
                 logger.error(f"Heartbeat error: {e}")
             await asyncio.sleep(HEARTBEAT_INTERVAL)

@@ -12,6 +12,11 @@ from agent.state_manager import state_manager
 
 logger = logging.getLogger(__name__)
 
+
+class WorkerCapacityError(Exception):
+    pass
+
+
 class ProcessManager:
     """
     Manages TwitchDropsBot as a single native C# .NET process running all
@@ -26,6 +31,7 @@ class ProcessManager:
         self.log_reader_thread: Optional[threading.Thread] = None
         self._restart_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        self.max_containers = 50
 
     @staticmethod
     def _find_dotnet_binary() -> Optional[str]:
@@ -131,6 +137,12 @@ class ProcessManager:
         logger.info(f"[ProcessManager] Adding account {login} for job {job_id[:8]} ({target.get('game', 'Unknown')})")
 
         async with self._lock:
+            if job_id in self.active_jobs:
+                return f"proc_{job_id[:8]}"
+            if len(self.active_jobs) >= self.max_containers:
+                raise WorkerCapacityError(
+                    f"Worker account limit reached ({len(self.active_jobs)}/{self.max_containers})"
+                )
             self.active_jobs[job_id] = {
                 'job_id': job_id,
                 'account': account,
@@ -144,6 +156,25 @@ class ProcessManager:
         # Apply state with debounced restart
         self._schedule_debounced_restart(delay=1.5)
         return f"proc_{job_id[:8]}"
+
+    async def set_max_containers(self, max_containers: int) -> list[dict]:
+        """Apply the server limit and remove newest jobs if current state exceeds it."""
+        limit = max(0, int(max_containers))
+        async with self._lock:
+            self.max_containers = limit
+            excess_count = max(0, len(self.active_jobs) - limit)
+            excess_ids = list(self.active_jobs)[-excess_count:] if excess_count else []
+            removed = [self.active_jobs.pop(job_id) for job_id in excess_ids]
+            if removed:
+                state_manager.update_jobs(self.active_jobs)
+                self._schedule_debounced_restart(delay=0.2)
+        if removed:
+            logger.warning(
+                "Worker account limit set to %s; returned %s excess account(s) to the server",
+                limit,
+                len(removed),
+            )
+        return removed
 
     async def stop_container(self, container_id: str = None, job_id: str = None) -> bool:
         """Unregister a job/account and trigger single-process reload."""
