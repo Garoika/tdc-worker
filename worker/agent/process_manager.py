@@ -241,10 +241,22 @@ class ProcessManager:
         # Build unified config.json
         favourite_games = list({j['game'] for j in jobs_snapshot if j.get('game')})
         priority_channels = []
+        force_time_streamers = []
         for j in jobs_snapshot:
             t = j.get('target') or {}
             for s in t.get('priority_streamers') or []:
-                if s and str(s).strip() and str(s).strip() not in priority_channels:
+                if isinstance(s, dict):
+                    login_val = (s.get('login') or '').strip()
+                    if login_val and login_val not in priority_channels:
+                        priority_channels.append(login_val)
+                    if s.get('force_time') and login_val:
+                        existing = {ft['Login'] for ft in force_time_streamers}
+                        if login_val not in existing:
+                            force_time_streamers.append({
+                                "Login": login_val,
+                                "Minutes": int(s.get('minutes') or 60)
+                            })
+                elif s and str(s).strip() and str(s).strip() not in priority_channels:
                     priority_channels.append(str(s).strip())
 
         twitch_users = []
@@ -282,6 +294,7 @@ class ProcessManager:
                 "AutoReloadInactiveStreamers": True,
                 "PriorityChannels": priority_channels,
                 "PriorityStreamers": priority_channels,
+                "ForceTimeStreamers": force_time_streamers,
                 "BlacklistedStreamers": [],
                 "StreamerSelectionStrategy": "LowestViewers",
                 "LiveStreamerCacheExpiration": 15,
