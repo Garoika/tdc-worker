@@ -23,11 +23,12 @@ _MONITOR_PIDFILE = Path(__file__).resolve().parent.parent / ".monitor.pid"
 def _monitor_already_running() -> bool:
     """Return True if a monitor process from a previous run is still alive."""
     try:
+        if not _MONITOR_PIDFILE.exists():
+            return False
         pid = int(_MONITOR_PIDFILE.read_text().strip())
-        # os.kill(pid, 0) raises if process doesn't exist
-        os.kill(pid, 0)
-        return True
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        import psutil
+        return psutil.pid_exists(pid)
+    except Exception:
         return False
 
 def _write_monitor_pid(pid: int):
