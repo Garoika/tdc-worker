@@ -1,7 +1,70 @@
 const SERVER_URL = "http://127.0.0.1:5000";
 let isServerOnline = false;
+let currentProxyAuth = null;
 
 console.log("%c[Twitch Farm Background] 🚀 Service worker initialized", "color: #9146FF; font-weight: bold;");
+
+// Set up Chrome Proxy for Twitch domains only
+function applyProxySettings(proxy) {
+    if (!proxy || !proxy.host || !proxy.port) {
+        clearProxySettings();
+        return;
+    }
+
+    const host = proxy.host;
+    const port = proxy.port;
+    currentProxyAuth = (proxy.username && proxy.password) ? {
+        username: proxy.username,
+        password: proxy.password
+    } : null;
+
+    // PAC script routes ONLY *.twitch.tv and twitch.tv traffic through HTTP proxy
+    const pacScript = `
+        function FindProxyForURL(url, host) {
+            if (shExpMatch(host, "*.twitch.tv") || host === "twitch.tv") {
+                return "PROXY ${host}:${port}";
+            }
+            return "DIRECT";
+        }
+    `;
+
+    chrome.proxy.settings.set(
+        {
+            value: {
+                mode: "pac_script",
+                pacScript: { data: pacScript }
+            },
+            scope: "regular"
+        },
+        () => {
+            console.log(`%c[Background] 🛡️ Proxy enabled for Twitch: ${host}:${port} (Auth: ${currentProxyAuth ? 'Yes' : 'No'})`, "color: #00d2d3; font-weight: bold;");
+        }
+    );
+}
+
+function clearProxySettings() {
+    currentProxyAuth = null;
+    chrome.proxy.settings.clear({ scope: "regular" }, () => {
+        console.log("%c[Background] 🛡️ Proxy cleared, direct connection restored", "color: #ff9f43; font-weight: bold;");
+    });
+}
+
+// Automatically authenticate proxy requests without browser prompt
+chrome.webRequest.onAuthRequired.addListener(
+    (details, callback) => {
+        if (currentProxyAuth && currentProxyAuth.username && currentProxyAuth.password) {
+            return {
+                authCredentials: {
+                    username: currentProxyAuth.username,
+                    password: currentProxyAuth.password
+                }
+            };
+        }
+        return {};
+    },
+    { urls: ["*://*.twitch.tv/*", "*://twitch.tv/*"] },
+    ["blocking"]
+);
 
 // Completely wipe ALL Twitch cookies across all subdomains (including httpOnly cookies like persistent, sudo, etc.)
 async function wipeAllHttpOnlyCookies() {
@@ -92,11 +155,20 @@ async function checkServerStatus() {
             lastUserCode = data.user_code;
             isServerOnline = true;
             console.log(`[Background] 🚀 New auth code detected: ${data.user_code}`);
+            
+            // Dynamically apply proxy if provided by server
+            if (data.proxy) {
+                applyProxySettings(data.proxy);
+            } else {
+                clearProxySettings();
+            }
+
             openOrFocusTwitchActivate(data.user_code);
         } else if (data && (data.status === "finished" || data.status === "waiting")) {
             if (isServerOnline) {
                 console.log("[Background] 🏁 Auth queue finished! Wiping Twitch session completely...");
                 await wipeTwitchSessionCompletely();
+                clearProxySettings();
             }
             isServerOnline = false;
             lastUserCode = null;
@@ -105,6 +177,7 @@ async function checkServerStatus() {
         if (isServerOnline) {
             console.log("[Background] 🔌 Server disconnected, wiping session...");
             await wipeTwitchSessionCompletely();
+            clearProxySettings();
         }
         isServerOnline = false;
         lastUserCode = null;

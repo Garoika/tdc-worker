@@ -162,6 +162,7 @@ class NativeAuthService:
             logger.info(f"🔑 Auth requested for {login} | User Code: {user_code}")
 
             # 2. Expose to Chrome Extension
+            proxy_data = account.get('proxy')
             self.current_auth_state = {
                 "index": login,
                 "password": password,
@@ -170,7 +171,7 @@ class NativeAuthService:
                 "user_code": user_code,
                 "client_id": CLIENT_ID,
                 "state": "pending",
-                "proxy": None
+                "proxy": proxy_data
             }
 
             # 3. Poll for approval

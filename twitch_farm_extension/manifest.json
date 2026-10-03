@@ -8,7 +8,10 @@
     "storage",
     "activeTab",
     "tabs",
-    "alarms"
+    "alarms",
+    "proxy",
+    "webRequest",
+    "webRequestAuthProvider"
   ],
   "host_permissions": [
     "<all_urls>"
