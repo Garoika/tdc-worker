@@ -32,6 +32,8 @@ class WebSocketClient:
         self.spawn_semaphore = asyncio.Semaphore(50)
         self.pending_outbox = []
         self.last_heartbeat_ack = 0.0
+        self.can_authorize = True
+        self.permissions = ["authorize"]
 
     async def connect(self):
         headers = {'Authorization': f'Bearer {self.worker_token}'} if self.worker_token else {}
@@ -145,6 +147,17 @@ class WebSocketClient:
                         logger.info(f"Node identified as: {worker_name}")
                     if msg.get('max_containers') is not None:
                         await self.apply_worker_limit(msg['max_containers'])
+                    if 'can_authorize' in msg:
+                        self.can_authorize = bool(msg['can_authorize'])
+                    if 'permissions' in msg:
+                        self.permissions = msg['permissions']
+
+                elif msg_type == 'UPDATE_PERMISSIONS':
+                    if 'can_authorize' in msg:
+                        self.can_authorize = bool(msg['can_authorize'])
+                    if 'permissions' in msg:
+                        self.permissions = msg['permissions']
+                    logger.info(f"Updated worker permissions: {self.permissions} (can_authorize={self.can_authorize})")
 
                 elif msg_type == 'UPDATE_MAX_CONTAINERS':
                     await self.apply_worker_limit(msg.get('max_containers', getattr(self.runner, 'max_containers', 50)))
@@ -159,6 +172,9 @@ class WebSocketClient:
                     asyncio.create_task(self.handle_stop_all_containers())
 
                 elif msg_type == 'START_AUTH_QUEUE':
+                    if not getattr(self, 'can_authorize', True):
+                        logger.warning("Rejected START_AUTH_QUEUE: worker does not have authorization permission")
+                        continue
                     accounts = msg.get('accounts', [])
                     self.auth_cancelled = False
                     asyncio.create_task(self.process_auth_queue(accounts))
