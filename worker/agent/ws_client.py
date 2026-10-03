@@ -90,12 +90,25 @@ class WebSocketClient:
                     "containers": containers
                 })
                 
-                # Start background loops
+                # All critical loops run as peers — if ANY dies, tear down and reconnect
                 heartbeat_task = asyncio.create_task(self.heartbeat_loop())
                 log_task = asyncio.create_task(self.log_monitor_loop())
-                self.tasks = [heartbeat_task, log_task]
+                listen_task = asyncio.create_task(self.listen_loop())
+                self.tasks = [heartbeat_task, log_task, listen_task]
                 
-                await self.listen_loop()
+                done, pending = await asyncio.wait(
+                    self.tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+                # Log which task exited
+                for t in done:
+                    if t.exception():
+                        logger.error(f"Critical task crashed: {t.get_name()}: {t.exception()}")
+                    else:
+                        logger.warning(f"Critical task exited: {t.get_name()}")
+                # Cancel survivors and force reconnect
+                for t in pending:
+                    t.cancel()
+                raise ConnectionError("Task exited, forcing reconnect")
                 
             except (ConnectionClosed, ConnectionRefusedError, Exception) as e:
                 logger.error(f"WebSocket connection error: {e}")
