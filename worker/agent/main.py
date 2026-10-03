@@ -5,6 +5,7 @@ import asyncio
 import logging
 import shutil
 import subprocess
+from pathlib import Path
 
 from agent.config import MASTER_URL, WORKER_TOKEN, RUNNER_TYPE
 from agent.metrics import SystemMetrics
@@ -17,6 +18,29 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger('worker.main')
 
 monitor_proc = None
+_MONITOR_PIDFILE = Path(__file__).resolve().parent.parent / ".monitor.pid"
+
+def _monitor_already_running() -> bool:
+    """Return True if a monitor process from a previous run is still alive."""
+    try:
+        pid = int(_MONITOR_PIDFILE.read_text().strip())
+        # os.kill(pid, 0) raises if process doesn't exist
+        os.kill(pid, 0)
+        return True
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        return False
+
+def _write_monitor_pid(pid: int):
+    try:
+        _MONITOR_PIDFILE.write_text(str(pid))
+    except Exception:
+        pass
+
+def _clear_monitor_pid():
+    try:
+        _MONITOR_PIDFILE.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 def cleanup_monitor():
     global monitor_proc
@@ -25,6 +49,7 @@ def cleanup_monitor():
             monitor_proc.terminate()
         except Exception:
             pass
+    _clear_monitor_pid()
 
 def get_linux_terminal_cmd(base_cmd: list) -> list | None:
     """Finds an available desktop terminal emulator on Linux or tmux session."""
@@ -82,6 +107,11 @@ def get_linux_terminal_cmd(base_cmd: list) -> list | None:
 def launch_monitor():
     global monitor_proc
     try:
+        # Singleton guard: skip if a monitor from a previous exec is still alive
+        if _monitor_already_running():
+            logger.info("Live Monitor already running (previous instance). Skipping launch.")
+            return
+
         current_pid = os.getpid()
         base_cmd = [sys.executable, "-m", "agent.monitor", "--parent-pid", str(current_pid)]
         env = os.environ.copy()
@@ -91,6 +121,7 @@ def launch_monitor():
         if os.name == 'nt':
             creationflags = subprocess.CREATE_NEW_CONSOLE
             monitor_proc = subprocess.Popen(base_cmd, creationflags=creationflags, env=env)
+            _write_monitor_pid(monitor_proc.pid)
             atexit.register(cleanup_monitor)
             logger.info(f"Launched companion Live Monitor Dashboard in new window (PID: {monitor_proc.pid})")
         else:
@@ -102,6 +133,7 @@ def launch_monitor():
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
+                _write_monitor_pid(monitor_proc.pid)
                 atexit.register(cleanup_monitor)
                 logger.info(f"Launched companion Live Monitor in separate terminal ({term_cmd[0]}, PID: {monitor_proc.pid})")
             else:
