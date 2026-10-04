@@ -68,7 +68,7 @@ WORKER_PUBLIC_IP = os.environ.get('WORKER_PUBLIC_IP') or file_config.get('worker
 RUNNER_TYPE = 'process'
 MAX_PROCESSES = int(os.environ.get('MAX_PROCESSES') or os.environ.get('MAX_CONTAINERS', '100'))
 MAX_CONTAINERS = MAX_PROCESSES
-HEARTBEAT_INTERVAL = int(os.environ.get('HEARTBEAT_INTERVAL', '3'))
+HEARTBEAT_INTERVAL = int(os.environ.get('HEARTBEAT_INTERVAL', '5'))
 WORKER_NAME = os.environ.get('WORKER_NAME') or file_config.get('worker_name') or 'Worker'
 LOG_TAIL_LINES = int(os.environ.get('LOG_TAIL_LINES', '50'))
 
