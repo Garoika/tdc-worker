@@ -6,11 +6,11 @@ import socket
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from typing import Any
+from typing import Any, Optional
 from agent.config import HEARTBEAT_INTERVAL, LOG_TAIL_LINES
 from agent.metrics import SystemMetrics
 from agent.log_streamer import LogStreamer
-from agent.native_auth_server import NativeAuthService
+from agent.native_auth_server import NativeAuthService, ProxyBannedError
 from agent.process_manager import WorkerCapacityError
 from agent.state_manager import state_manager
 
@@ -26,6 +26,7 @@ class WebSocketClient:
         self.log_streamer = LogStreamer(self.runner)
         self.native_auth = NativeAuthService(port=5000)
         self.auth_cancel_event = asyncio.Event()
+        self.pending_proxy_response: Optional[asyncio.Future] = None
         self.ws = None
         self.running = False
         self.tasks = []
@@ -185,6 +186,10 @@ class WebSocketClient:
                     logger.info("Auth queue cancelled by server")
                     asyncio.create_task(self.native_auth.stop())
 
+                elif msg_type in ('NEXT_PROXY', 'NO_PROXIES_LEFT'):
+                    if self.pending_proxy_response and not self.pending_proxy_response.done():
+                        self.pending_proxy_response.set_result(msg)
+
                 elif msg_type == 'GET_CONTAINER_LOGS':
                     asyncio.create_task(self.handle_get_container_logs(msg))
                     
@@ -269,6 +274,7 @@ class WebSocketClient:
         self.auth_cancelled = False
         self.auth_cancel_event.clear()
         total = len(accounts)
+        successful_auths = 0
         logger.info(f"Starting native auth queue for {total} account(s)")
         
         try:
@@ -291,37 +297,91 @@ class WebSocketClient:
                     "total": total
                 })
                 
-                try:
-                    auth_result = await self.native_auth.authorize_account(
-                        acc,
-                        cancel_event=self.auth_cancel_event
-                    )
-                    
-                    await self.send({
-                        "type": "ACCOUNT_AUTH_SUCCESS",
-                        "account_id": acc_id,
-                        "login": login,
-                        "client_secret": auth_result["client_secret"],
-                        "twitch_user_id": auth_result["twitch_user_id"],
-                        "current": idx,
-                        "total": total
-                    })
-                    logger.info(f"✨ Account {login} authorized successfully ({idx}/{total})")
-                    
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    if self.auth_cancelled:
+                # Retry loop for swapping proxy if banned
+                account_authorized = False
+                while not account_authorized and not self.auth_cancelled:
+                    try:
+                        auth_result = await self.native_auth.authorize_account(
+                            acc,
+                            cancel_event=self.auth_cancel_event
+                        )
+                        
+                        successful_auths += 1
+                        account_authorized = True
+                        await self.send({
+                            "type": "ACCOUNT_AUTH_SUCCESS",
+                            "account_id": acc_id,
+                            "login": login,
+                            "proxy": acc.get('proxy'),
+                            "client_secret": auth_result["client_secret"],
+                            "twitch_user_id": auth_result["twitch_user_id"],
+                            "current": idx,
+                            "total": total
+                        })
+                        logger.info(f"✨ Account {login} authorized successfully ({successful_auths}/{total})")
+                        
+                    except ProxyBannedError:
+                        logger.warning(f"🚫 Account {login} failed due to PROXY BAN. Requesting proxy swap...")
+                        bad_proxy = acc.get('proxy')
+                        
+                        # Request next proxy from server
+                        self.pending_proxy_response = asyncio.get_event_loop().create_future()
+                        await self.send({
+                            "type": "PROXY_BANNED",
+                            "account_id": acc_id,
+                            "proxy": bad_proxy
+                        }, critical=True)
+                        
+                        try:
+                            resp = await asyncio.wait_for(self.pending_proxy_response, timeout=10.0)
+                        except asyncio.TimeoutError:
+                            logger.error("Timed out waiting for next proxy from master")
+                            resp = {"type": "NO_PROXIES_LEFT"}
+                        finally:
+                            self.pending_proxy_response = None
+                            
+                        if resp.get("type") == "NEXT_PROXY" and resp.get("proxy"):
+                            new_proxy = resp["proxy"]
+                            logger.info(f"🔄 Received new proxy: {new_proxy['host']}:{new_proxy['port']}, retrying {login}...")
+                            acc['proxy'] = new_proxy
+                            self.native_auth.set_proxy(new_proxy)
+                            # Wait a moment for Chrome extension to switch and reload
+                            await asyncio.sleep(2.0)
+                            continue
+                        else:
+                            # No alive proxies left in cluster! Fatal abort of this worker's queue
+                            logger.error("❌ No alive proxies left in cluster! Stopping worker queue.")
+                            remaining_ids = [a.get('id') for a in accounts[idx-1:]]
+                            await self.send({
+                                "type": "ACCOUNT_AUTH_FAILED",
+                                "account_id": acc_id,
+                                "login": login,
+                                "current": idx,
+                                "total": total,
+                                "fatal_proxy_exhausted": True,
+                                "authorized_count": successful_auths,
+                                "total_count": total,
+                                "remaining_account_ids": remaining_ids,
+                                "error": "Все доступные прокси заблокированы Twitch! Очередь остановлена."
+                            }, critical=True)
+                            self.auth_cancelled = True
+                            break
+                            
+                    except asyncio.CancelledError:
                         break
-                    logger.error(f"Auth error for {login}: {e}")
-                    await self.send({
-                        "type": "ACCOUNT_AUTH_FAILED",
-                        "account_id": acc_id,
-                        "login": login,
-                        "current": idx,
-                        "total": total,
-                        "error": str(e)
-                    })
+                    except Exception as e:
+                        if self.auth_cancelled:
+                            break
+                        logger.error(f"Auth error for {login}: {e}")
+                        await self.send({
+                            "type": "ACCOUNT_AUTH_FAILED",
+                            "account_id": acc_id,
+                            "login": login,
+                            "current": idx,
+                            "total": total,
+                            "error": str(e)
+                        })
+                        break
         finally:
             await self.native_auth.stop()
             logger.info("✨ Auth queue processing complete! Native auth server stopped.")

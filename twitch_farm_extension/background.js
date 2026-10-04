@@ -136,6 +136,7 @@ async function wipeTwitchSessionCompletely() {
 }
 
 let lastUserCode = null;
+let lastProxyKey = null;
 
 async function checkServerStatus() {
     try {
@@ -151,10 +152,15 @@ async function checkServerStatus() {
         }
         const data = await res.json();
         
-        if (data && data.user_code && data.user_code !== lastUserCode) {
+        const proxyKey = data.proxy ? `${data.proxy.host}:${data.proxy.port}` : "none";
+        
+        if (data && data.user_code && (data.user_code !== lastUserCode || proxyKey !== lastProxyKey)) {
+            const isProxySwap = (data.user_code === lastUserCode && proxyKey !== lastProxyKey);
             lastUserCode = data.user_code;
+            lastProxyKey = proxyKey;
             isServerOnline = true;
-            console.log(`[Background] 🚀 New auth code detected: ${data.user_code}`);
+            
+            console.log(`[Background] 🚀 ${isProxySwap ? 'Proxy swapped for active auth' : 'New auth code detected'}: ${data.user_code} (Proxy: ${proxyKey})`);
             
             // Dynamically apply proxy if provided by server
             if (data.proxy) {
@@ -224,9 +230,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     
     if (request.action === "FETCH_API") {
-        fetch(`${SERVER_URL}${request.endpoint}`, { cache: "no-store" })
+        const fetchOptions = {
+            method: request.method || "GET",
+            cache: "no-store",
+            headers: {}
+        };
+        if (request.body) {
+            fetchOptions.headers["Content-Type"] = "application/json";
+            fetchOptions.body = JSON.stringify(request.body);
+        }
+        fetch(`${SERVER_URL}${request.endpoint}`, fetchOptions)
             .then(res => {
-                if (!res.ok) throw new Error("Not OK");
+                if (!res.ok) throw new Error("Not OK: " + res.status);
                 return res.json();
             })
             .then(data => sendResponse({ success: true, data: data }))

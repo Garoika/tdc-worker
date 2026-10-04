@@ -10,6 +10,10 @@ logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 CLIENT_ID = "ue6666qo983tsx6so1t0vnawi233wa"
 SCOPES = "channel_read chat:read user_blocks_edit user_blocks_read user_follows_edit user_read"
 
+class ProxyBannedError(Exception):
+    """Raised when Chrome extension detects Twitch proxy ban banner."""
+    pass
+
 class NativeAuthService:
     def __init__(self, port: int = 5000):
         self.port = port
@@ -18,9 +22,30 @@ class NativeAuthService:
         self.site: Optional[web.TCPSite] = None
         self.current_auth_state: Dict[str, Any] = {}
         self.is_running = False
+        self.proxy_banned_event = asyncio.Event()
 
         self.app.router.add_route('*', '/api/current', self._handle_current)
+        self.app.router.add_route('*', '/api/report_proxy_dead', self._handle_report_proxy_dead)
         self.app.router.add_route('OPTIONS', '/{tail:.*}', self._handle_cors)
+
+    def set_proxy(self, proxy_data: Optional[Dict[str, Any]]):
+        """Update proxy in current auth state on the fly."""
+        self.current_auth_state["proxy"] = proxy_data
+        logger.info(f"🔄 Swapped proxy in active session: {proxy_data.get('host') if proxy_data else 'None'}:{proxy_data.get('port') if proxy_data else ''}")
+
+    async def _handle_report_proxy_dead(self, request: web.Request):
+        """Called by Chrome extension when Twitch shows 'Your browser is not currently supported'."""
+        if request.method == "OPTIONS":
+            return await self._handle_cors(request)
+
+        headers = {
+            "Access-Control-Allow-Origin": self._cors_origin(request),
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        }
+        logger.warning("🚨 Chrome extension reported: Twitch blocked the current proxy!")
+        self.proxy_banned_event.set()
+        return web.json_response({"status": "acknowledged"}, headers=headers)
 
     async def start(self):
         """Start the local HTTP server on port 5000."""
@@ -103,7 +128,10 @@ class NativeAuthService:
             if cancel_event and cancel_event.is_set():
                 raise asyncio.CancelledError("Auth cancelled by user")
 
-            await asyncio.sleep(2.5)
+            if self.proxy_banned_event.is_set():
+                raise ProxyBannedError("Current proxy is banned by Twitch")
+
+            await asyncio.sleep(2.0)
 
             data = aiohttp.FormData()
             data.add_field("client_id", CLIENT_ID)
@@ -149,6 +177,7 @@ class NativeAuthService:
         3. Poll Twitch until approved
         4. Validate token and return client_secret + twitch_user_id
         """
+        self.proxy_banned_event.clear()
         login = account.get('login', '')
         auth_token = account.get('auth_token', '')
         password = account.get('password', '')
