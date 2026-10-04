@@ -103,7 +103,7 @@ class ProcessManager:
         import os
         if os.name != 'nt':
             dotnet_bin = self._find_dotnet_binary()
-            if not dotnet_bin and not (linux_bin.exists() and not linux_bin.name.endswith('.exe')):
+            if not dotnet_bin:
                 logger.warning("[ProcessManager] .NET runtime (dotnet) not found! Starting automatic installation...")
                 self._auto_install_dotnet()
                 dotnet_bin = self._find_dotnet_binary()
