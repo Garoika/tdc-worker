@@ -265,7 +265,7 @@ class ProcessManager:
             acc = j['account']
             login = acc.get('login')
             auth_token = acc.get('auth_token', '')
-            client_secret = acc.get('client_secret', '')
+            client_secret = acc.get('client_secret', '') or auth_token
             twitch_user_id = acc.get('twitch_user_id', '')
             game = j['game']
 
@@ -311,9 +311,12 @@ class ProcessManager:
         config_dir = self.bin_dir / 'Configuration'
         config_dir.mkdir(parents=True, exist_ok=True)
         config_path = config_dir / 'config.json'
+        root_config_path = self.bin_dir / 'config.json'
 
         try:
             with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2)
+            with open(root_config_path, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=2)
             logger.info(f"[ProcessManager] Saved unified config with {len(twitch_users)} account(s) to {config_path}")
         except Exception as e:
