@@ -335,6 +335,10 @@ class ProcessManager:
 
         # On Linux / macOS:
         if os.name != 'nt':
+            dotnet_path = self._find_dotnet_binary() or "dotnet"
+            if dll_path.exists():
+                return [dotnet_path, str(dll_path)]
+
             if linux_bin.exists() and not linux_bin.name.endswith('.exe'):
                 try:
                     os.chmod(linux_bin, 0o755)
@@ -342,7 +346,6 @@ class ProcessManager:
                 except Exception:
                     pass
 
-            dotnet_path = self._find_dotnet_binary() or "dotnet"
             target_file = dll_path if dll_path.exists() else exe_path
             return [dotnet_path, str(target_file)]
 
