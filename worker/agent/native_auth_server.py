@@ -34,7 +34,7 @@ class NativeAuthService:
         logger.info(f"🔄 Swapped proxy in active session: {proxy_data.get('host') if proxy_data else 'None'}:{proxy_data.get('port') if proxy_data else ''}")
 
     async def _handle_report_proxy_dead(self, request: web.Request):
-        """Called by Chrome extension when Twitch shows 'Your browser is not currently supported'."""
+        """Called by Chrome extension when Twitch shows proxy error, timeout or unsupported browser banner."""
         if request.method == "OPTIONS":
             return await self._handle_cors(request)
 
@@ -43,9 +43,17 @@ class NativeAuthService:
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
         }
-        logger.warning("🚨 Chrome extension reported: Twitch blocked the current proxy!")
+        
+        reason = "unknown"
+        try:
+            body = await request.json()
+            reason = body.get("reason", "unspecified")
+        except Exception:
+            pass
+
+        logger.warning(f"🚨 Chrome extension reported dead proxy! Reason: {reason}")
         self.proxy_banned_event.set()
-        return web.json_response({"status": "acknowledged"}, headers=headers)
+        return web.json_response({"status": "acknowledged", "reason": reason}, headers=headers)
 
     async def start(self):
         """Start the local HTTP server on port 5000."""

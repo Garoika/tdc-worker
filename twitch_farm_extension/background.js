@@ -46,6 +46,111 @@ function clearProxySettings() {
     });
 }
 
+// ─────────────────────────────────────────────────────────────
+// Watchdog: Timeout & Connection Error Detection for Proxy
+// ─────────────────────────────────────────────────────────────
+let trackedTabId = null;
+let pageLoadTimeoutTimer = null;
+let reloadAttemptsCount = 0;
+let isReportingDeadProxy = false;
+const MAX_LOAD_TIMEOUT_MS = 20000; // 20 seconds
+
+function clearWatchdogTimer() {
+    if (pageLoadTimeoutTimer) {
+        clearTimeout(pageLoadTimeoutTimer);
+        pageLoadTimeoutTimer = null;
+    }
+}
+
+async function reportProxyDeadToWorker(reason) {
+    if (isReportingDeadProxy) return;
+    isReportingDeadProxy = true;
+    clearWatchdogTimer();
+    console.error(`%c[Background] 🚨 Reporting dead proxy to worker! Reason: ${reason}`, "color: #ff4757; font-weight: bold; font-size: 13px;");
+
+    try {
+        await fetch(`${SERVER_URL}/api/report_proxy_dead`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: reason })
+        });
+        console.log("[Background] ✅ Dead proxy reported successfully. Waiting for proxy swap...");
+    } catch (err) {
+        console.error("[Background] Failed to report dead proxy:", err);
+    }
+}
+
+function handleLoadFailure(reason, tabId) {
+    if (!isServerOnline) return;
+    clearWatchdogTimer();
+
+    if (reloadAttemptsCount < 1) {
+        reloadAttemptsCount++;
+        console.warn(`%c[Background] ⚠️ Page load issue (${reason}). Reloading tab (attempt 1/1)...`, "color: #ffa502; font-weight: bold;");
+        startWatchdog(tabId, "after_reload");
+        chrome.tabs.reload(tabId, { bypassCache: true }, () => {
+            if (chrome.runtime.lastError) {}
+        });
+    } else {
+        reportProxyDeadToWorker(reason);
+    }
+}
+
+function startWatchdog(tabId, trigger = "initial") {
+    clearWatchdogTimer();
+    trackedTabId = tabId;
+    pageLoadTimeoutTimer = setTimeout(() => {
+        console.warn(`[Background] ⏳ 20s timeout exceeded for tab ${tabId} (${trigger})`);
+        handleLoadFailure("timeout_20s", tabId);
+    }, MAX_LOAD_TIMEOUT_MS);
+}
+
+// Listen for tab status transitions
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (!tab.url || !tab.url.includes("twitch.tv")) return;
+
+    if (changeInfo.status === "loading") {
+        if (trackedTabId === tabId && !pageLoadTimeoutTimer) {
+            startWatchdog(tabId, "navigating");
+        }
+    } else if (changeInfo.status === "complete") {
+        if (trackedTabId === tabId) {
+            console.log(`%c[Background] ✅ Twitch page loaded completely in tab ${tabId}`, "color: #2ed573; font-weight: bold;");
+            clearWatchdogTimer();
+            reloadAttemptsCount = 0;
+        }
+    }
+});
+
+// Intercept low-level network errors caused by dead/dropped proxy
+chrome.webRequest.onErrorOccurred.addListener(
+    (details) => {
+        if (!isServerOnline || details.tabId < 0) return;
+        if (!details.url.includes("twitch.tv")) return;
+        
+        // Ignore aborts (e.g. user navigation or cancelled tracking)
+        if (details.error === "net::ERR_ABORTED") return;
+
+        const proxyErrors = [
+            "net::ERR_PROXY_CONNECTION_FAILED",
+            "net::ERR_TUNNEL_CONNECTION_FAILED",
+            "net::ERR_TIMED_OUT",
+            "net::ERR_CONNECTION_TIMED_OUT",
+            "net::ERR_CONNECTION_RESET",
+            "net::ERR_CONNECTION_REFUSED",
+            "net::ERR_CONNECTION_CLOSED",
+            "net::ERR_NAME_NOT_RESOLVED",
+            "net::ERR_SOCKS_CONNECTION_FAILED"
+        ];
+
+        if (details.type === "main_frame" || proxyErrors.includes(details.error)) {
+            console.warn(`[Background] ⚠️ WebRequest error: ${details.error} on ${details.url}`);
+            handleLoadFailure(`network_error_${details.error}`, details.tabId);
+        }
+    },
+    { urls: ["https://*.twitch.tv/*"] }
+);
+
 // Automatically authenticate proxy requests without browser prompt
 chrome.webRequest.onAuthRequired.addListener(
     (details, callback) => {
@@ -159,6 +264,10 @@ async function checkServerStatus() {
             
             console.log(`[Background] 🚀 ${isProxySwap ? 'Proxy swapped for active auth' : 'New auth code detected'}: ${data.user_code} (Proxy: ${proxyKey})`);
             
+            // Reset flags for new auth or proxy swap
+            isReportingDeadProxy = false;
+            reloadAttemptsCount = 0;
+
             // Dynamically apply proxy if provided by server
             if (data.proxy) {
                 applyProxySettings(data.proxy);
@@ -168,6 +277,9 @@ async function checkServerStatus() {
 
             openOrFocusTwitchActivate(data.user_code);
         } else if (data && (data.status === "finished" || data.status === "waiting")) {
+            clearWatchdogTimer();
+            isReportingDeadProxy = false;
+            reloadAttemptsCount = 0;
             if (isServerOnline) {
                 console.log("[Background] 🏁 Auth queue finished! Wiping Twitch session completely...");
                 await wipeTwitchSessionCompletely();
@@ -177,6 +289,9 @@ async function checkServerStatus() {
             lastUserCode = null;
         }
     } catch (e) {
+        clearWatchdogTimer();
+        isReportingDeadProxy = false;
+        reloadAttemptsCount = 0;
         if (isServerOnline) {
             console.log("[Background] 🔌 Server disconnected, wiping session...");
             await wipeTwitchSessionCompletely();
@@ -191,9 +306,15 @@ function openOrFocusTwitchActivate(userCode) {
     const url = userCode ? `https://www.twitch.tv/activate?device-code=${userCode}` : "https://www.twitch.tv/activate";
     chrome.tabs.query({ url: "https://*.twitch.tv/*" }, (tabs) => {
         if (tabs && tabs.length > 0) {
-            chrome.tabs.update(tabs[0].id, { url: url, active: true });
+            const targetTab = tabs[0];
+            startWatchdog(targetTab.id, "update_tab");
+            chrome.tabs.update(targetTab.id, { url: url, active: true });
         } else {
-            chrome.tabs.create({ url: url });
+            chrome.tabs.create({ url: url }, (createdTab) => {
+                if (createdTab) {
+                    startWatchdog(createdTab.id, "create_tab");
+                }
+            });
         }
     });
 }
