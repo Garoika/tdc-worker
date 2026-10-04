@@ -4,7 +4,7 @@ let currentProxyAuth = null;
 
 console.log("%c[Twitch Farm Background] 🚀 Service worker initialized", "color: #9146FF; font-weight: bold;");
 
-// Set up Chrome Proxy for Twitch domains only
+// Set up Chrome Proxy for entire browser (with localhost bypass)
 function applyProxySettings(proxy) {
     if (!proxy || !proxy.host || !proxy.port) {
         clearProxySettings();
@@ -12,32 +12,29 @@ function applyProxySettings(proxy) {
     }
 
     const host = proxy.host;
-    const port = proxy.port;
+    const port = parseInt(proxy.port);
     currentProxyAuth = (proxy.username && proxy.password) ? {
         username: proxy.username,
         password: proxy.password
     } : null;
 
-    // PAC script routes ONLY *.twitch.tv and twitch.tv traffic through HTTP proxy
-    const pacScript = `
-        function FindProxyForURL(url, host) {
-            if (shExpMatch(host, "*.twitch.tv") || host === "twitch.tv") {
-                return "PROXY ${host}:${port}";
-            }
-            return "DIRECT";
-        }
-    `;
-
     chrome.proxy.settings.set(
         {
             value: {
-                mode: "pac_script",
-                pacScript: { data: pacScript }
+                mode: "fixed_servers",
+                rules: {
+                    singleProxy: {
+                        scheme: "http",
+                        host: host,
+                        port: port
+                    },
+                    bypassList: ["127.0.0.1", "localhost", "::1", "<local>"]
+                }
             },
             scope: "regular"
         },
         () => {
-            console.log(`%c[Background] 🛡️ Proxy enabled for Twitch: ${host}:${port} (Auth: ${currentProxyAuth ? 'Yes' : 'No'})`, "color: #00d2d3; font-weight: bold;");
+            console.log(`%c[Background] 🛡️ Full browser proxy enabled: ${host}:${port} (Auth: ${currentProxyAuth ? 'Yes' : 'No'})`, "color: #00d2d3; font-weight: bold;");
         }
     );
 }
@@ -62,7 +59,7 @@ chrome.webRequest.onAuthRequired.addListener(
         }
         return {};
     },
-    { urls: ["*://*.twitch.tv/*", "*://twitch.tv/*"] },
+    { urls: ["<all_urls>"] },
     ["blocking"]
 );
 
