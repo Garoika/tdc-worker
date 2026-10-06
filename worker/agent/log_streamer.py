@@ -30,6 +30,19 @@ class LogStreamer:
         self.campaign_completed_re = re.compile(r'Campaign\s+"([^"]+)"\s*already completed', re.IGNORECASE)
         self.drop_re_quotes = re.compile(r'Drop\s+"([^"]+)"', re.IGNORECASE)
         
+        # 2b. Claim patterns from C# bot (multi-campaign claim detection)
+        # e.g.: [Claim] Claiming drop 'DropName' (ID: DropInstanceID) for 'CampaignName'...
+        self.claim_intent_re = re.compile(
+            r'\[Claim\]\s*Claiming drop\s*[\'"]([^\'"]+)[\'"]\s*(?:\(ID:\s*([^\'\)]+)\))?\s*for\s*[\'"]([^\'"]+)[\'"]',
+            re.IGNORECASE
+        )
+        # e.g.: [Claim] Successfully claimed drop 'DropName'!
+        self.claim_success_re = re.compile(
+            r'\[Claim\]\s*Successfully claimed drop\s*[\'"]([^\'"]+)[\'"]',
+            re.IGNORECASE
+        )
+        self.drop_campaign_cache = {}
+
         # 3. Streamer patterns (STRICT: only actual stream watch / events)
         self.st_spade_re = re.compile(r'SendSpadeEvents accepted for "([^"]+)"', re.IGNORECASE)
         self.st_watching_pipe_re = re.compile(r'watching\s+([a-zA-Z0-9_]{3,25})\s*\|', re.IGNORECASE)
@@ -53,6 +66,7 @@ class LogStreamer:
         spade_count = 0
         new_campaign_detected = None
         campaign_completed_detected = False
+        claims_map = {}
 
         for line_str in lines:
             line_str = line_str.strip()
@@ -171,9 +185,64 @@ class LogStreamer:
                 spade_count += 1
                 telemetry['is_actively_watching'] = True
 
+            # 4. Multi-campaign Claim detection
+            ci_match = self.claim_intent_re.search(line_str)
+            if ci_match:
+                d_name = ci_match.group(1).strip()
+                d_id = ci_match.group(2).strip() if ci_match.group(2) else None
+                c_name = ci_match.group(3).strip()
+                key = d_name.lower()
+                if c_name:
+                    self.drop_campaign_cache[key] = c_name
+                if key not in claims_map:
+                    claims_map[key] = {
+                        "drop_name": d_name,
+                        "drop_id": d_id,
+                        "campaign_name": c_name,
+                        "confirmed": False
+                    }
+                else:
+                    if c_name:
+                        claims_map[key]["campaign_name"] = c_name
+                    if d_id:
+                        claims_map[key]["drop_id"] = d_id
+
+            cs_match = self.claim_success_re.search(line_str)
+            if cs_match:
+                d_name = cs_match.group(1).strip()
+                key = d_name.lower()
+                if key in claims_map:
+                    claims_map[key]["confirmed"] = True
+                else:
+                    cached_camp = self.drop_campaign_cache.get(key)
+                    claims_map[key] = {
+                        "drop_name": d_name,
+                        "drop_id": None,
+                        "campaign_name": cached_camp,
+                        "confirmed": True
+                    }
+
         # If campaign changed to a new one
         if new_campaign_detected and 'campaign_name' not in telemetry:
             telemetry['campaign_name'] = new_campaign_detected
+
+        # Multi-campaign claimed drops list
+        claimed_drops_list = []
+        for item in claims_map.values():
+            if item.get("drop_name"):
+                c_name = (
+                    item.get("campaign_name") or
+                    self.drop_campaign_cache.get(item["drop_name"].lower()) or
+                    telemetry.get("campaign_name") or
+                    new_campaign_detected
+                )
+                claimed_drops_list.append({
+                    "drop_name": item["drop_name"],
+                    "drop_id": item.get("drop_id"),
+                    "campaign_name": c_name
+                })
+        if claimed_drops_list:
+            telemetry['claimed_drops'] = claimed_drops_list
 
         return telemetry
 
