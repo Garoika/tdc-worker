@@ -41,6 +41,11 @@ class LogStreamer:
             r'\[Claim\]\s*Successfully claimed drop\s*[\'"]([^\'"]+)[\'"]',
             re.IGNORECASE
         )
+        # e.g.: [Claim] Claim of 'DropName' for 'CampaignName' is unconfirmed
+        self.claim_unconfirmed_re = re.compile(
+            r'\[Claim\]\s*Claim of\s*[\'"]([^\'"]+)[\'"]\s*for\s*[\'"]([^\'"]+)[\'"]\s*is unconfirmed',
+            re.IGNORECASE
+        )
         self.drop_campaign_cache = {}
 
         # 3. Streamer patterns (STRICT: only actual stream watch / events)
@@ -221,6 +226,24 @@ class LogStreamer:
                         "campaign_name": cached_camp,
                         "confirmed": True
                     }
+
+            cu_match = self.claim_unconfirmed_re.search(line_str)
+            if cu_match:
+                d_name = cu_match.group(1).strip()
+                c_name = cu_match.group(2).strip()
+                key = d_name.lower()
+                if c_name:
+                    self.drop_campaign_cache[key] = c_name
+                if key not in claims_map:
+                    claims_map[key] = {
+                        "drop_name": d_name,
+                        "drop_id": None,
+                        "campaign_name": c_name,
+                        "confirmed": True
+                    }
+                else:
+                    if c_name:
+                        claims_map[key]["campaign_name"] = c_name
 
         # If campaign changed to a new one
         if new_campaign_detected and 'campaign_name' not in telemetry:
