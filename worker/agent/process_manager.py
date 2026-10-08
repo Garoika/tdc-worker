@@ -273,6 +273,7 @@ class ProcessManager:
                 "Enabled": True,
                 "AuthToken": auth_token,
                 "ClientSecret": client_secret,
+                "ClientID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
                 "Id": twitch_user_id,
                 "Login": login,
                 "FavouriteGames": [game] if game else [],
