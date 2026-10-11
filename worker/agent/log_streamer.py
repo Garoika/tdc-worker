@@ -27,7 +27,14 @@ class LogStreamer:
         self.drop_generic_re = re.compile(r'(?:Active drop|Mining drop|Claimed drop|Current drop)\s*[:\-]\s*(.+)$', re.IGNORECASE)
         self.campaign_drop_re = re.compile(r'Current drop campaign\s*:\s*([^,\(\n\r]+)', re.IGNORECASE)
         self.checking_campaign_re = re.compile(r'Checking\s+"[^"]+"\s*\("([^"]+)"\)', re.IGNORECASE)
-        self.campaign_completed_re = re.compile(r'Campaign\s+"([^"]+)"\s*already completed', re.IGNORECASE)
+        self.campaign_completed_re = re.compile(
+            r'Campaign\s+["\']?([^"\']+)["\']?\s*(?:is\s+100%\s+completed|already\s+completed|completed)', 
+            re.IGNORECASE
+        )
+        self.stream_inactive_re = re.compile(
+            r'(?:No active broadcaster|No broadcaster found|No broadcaster online|No broadcaster or campaign left|Stream went offline|Waiting \d+ seconds before|No campaign found)',
+            re.IGNORECASE
+        )
         self.drop_re_quotes = re.compile(r'Drop\s+"([^"]+)"', re.IGNORECASE)
         
         # 2b. Claim patterns from C# bot (multi-campaign claim detection)
@@ -72,15 +79,21 @@ class LogStreamer:
         new_campaign_detected = None
         campaign_completed_detected = False
         claims_map = {}
+        last_active_watch_line = -1
+        last_inactive_line = -1
 
-        for line_str in lines:
+        for line_idx, line_str in enumerate(lines):
             line_str = line_str.strip()
             if not line_str:
                 continue
 
             # Check if previous campaign completed
-            if self.campaign_completed_re.search(line_str) or 'removing' in line_str.lower() and 'finished campaigns' in line_str.lower():
+            if self.campaign_completed_re.search(line_str) or ('removing' in line_str.lower() and 'finished campaigns' in line_str.lower()):
                 campaign_completed_detected = True
+
+            # Check if stream/broadcaster is inactive or waiting
+            if self.stream_inactive_re.search(line_str):
+                last_inactive_line = line_idx
 
             # Check campaign checking lines: Checking "NARAKA: BLADEPOINT" ("JS1 PARTNER? 7.30")...
             chk_match = self.checking_campaign_re.search(line_str)
@@ -184,11 +197,11 @@ class LogStreamer:
                 streamer = st_match.group(1).strip(' "\'[]:-,')
                 if streamer and len(streamer) >= 3 and streamer.lower() not in ['channel', 'true', 'false', 'streamer', 'twitch', 'offline', 'online', 'none', 'null', 'info', 'warning', 'found', 'broadcaster']:
                     telemetry['active_streamer'] = streamer
-                    telemetry['is_actively_watching'] = True
+                    last_active_watch_line = line_idx
 
             if 'sendspadeevents accepted' in line_str.lower():
                 spade_count += 1
-                telemetry['is_actively_watching'] = True
+                last_active_watch_line = line_idx
 
             # 4. Multi-campaign Claim detection
             ci_match = self.claim_intent_re.search(line_str)
@@ -266,6 +279,25 @@ class LogStreamer:
                 })
         if claimed_drops_list:
             telemetry['claimed_drops'] = claimed_drops_list
+
+        # 5. Resolve active stream watching vs waiting / completed
+        if last_active_watch_line > last_inactive_line and last_active_watch_line != -1:
+            telemetry['is_actively_watching'] = True
+        else:
+            telemetry['is_actively_watching'] = False
+            telemetry['active_streamer'] = None
+
+        # 6. Check completed status
+        pct = telemetry.get('percentage', 0)
+        watched_m = telemetry.get('watched_minutes', 0)
+        req_m = telemetry.get('target_minutes', 0)
+        is_100_percent = (pct >= 100) or (req_m > 0 and watched_m >= req_m)
+
+        if (campaign_completed_detected or is_100_percent) and not telemetry.get('is_actively_watching'):
+            telemetry['is_completed'] = True
+            telemetry['active_streamer'] = None
+        else:
+            telemetry['is_completed'] = False
 
         return telemetry
 
