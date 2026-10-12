@@ -45,6 +45,9 @@ if not exist ".venv" (
 )
 
 :worker_loop
+if exist ".git" (
+    git pull origin main --quiet 2>nul
+)
 if exist ".venv\Scripts\python.exe" (
     echo       [INFO] Using virtual environment...
     .venv\Scripts\python.exe -m pip install -q --upgrade pip 2>nul
