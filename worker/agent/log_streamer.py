@@ -56,7 +56,8 @@ class LogStreamer:
         self.drop_campaign_cache = {}
 
         # 3. Streamer patterns (STRICT: only actual stream watch / events)
-        self.st_spade_re = re.compile(r'SendSpadeEvents accepted for "([^"]+)"', re.IGNORECASE)
+        self.st_spade_re = re.compile(r'SendSpadeEvents accepted for ["\']?([a-zA-Z0-9_]{3,25})["\']?(?:,|\s|$)', re.IGNORECASE)
+        self.st_hls_re = re.compile(r'stream segments (?:every \d+ seconds )?for ["\']?([a-zA-Z0-9_]{3,25})', re.IGNORECASE)
         self.st_watching_pipe_re = re.compile(r'watching\s+([a-zA-Z0-9_]{3,25})\s*\|', re.IGNORECASE)
         self.st_priority_re = re.compile(r'Selected priority channel\s+["\']?([^"\'\.\s]+)', re.IGNORECASE)
         self.st_switched_re = re.compile(r'Broadcaster switched from \S+ to ([a-zA-Z0-9_]{3,25})', re.IGNORECASE)
@@ -193,6 +194,7 @@ class LogStreamer:
             # 3. Streamer parsing
             st_match = (
                 self.st_spade_re.search(line_str) or 
+                self.st_hls_re.search(line_str) or
                 self.st_watching_pipe_re.search(line_str) or 
                 self.st_priority_re.search(line_str) or
                 self.st_switched_re.search(line_str) or
