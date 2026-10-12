@@ -3,6 +3,8 @@ import logging
 import json
 import subprocess
 import threading
+import time
+import shutil
 from collections import deque
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -30,6 +32,7 @@ class ProcessManager:
         self.log_buffer = deque(maxlen=20000)
         self.log_reader_thread: Optional[threading.Thread] = None
         self._restart_task: Optional[asyncio.Task] = None
+        self._retention_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
         self.max_containers = 50
 
@@ -130,6 +133,7 @@ class ProcessManager:
         except Exception:
             pass
         logger.info("Native Farmer Binary verified (Process Mode Active)")
+        self.ensure_retention_loop()
 
     async def spawn_container(self, job_id: str, account: dict, target: dict, limits: dict) -> str:
         """Register a job/account and trigger single-process startup/reload."""
@@ -563,3 +567,102 @@ class ProcessManager:
 
     # Backward compatibility alias
     run_auth_container = run_auth_process
+
+    def ensure_retention_loop(self):
+        """Start background log retention loop if not already running."""
+        try:
+            loop = asyncio.get_running_loop()
+            if self._retention_task is None or self._retention_task.done():
+                self._retention_task = loop.create_task(self._log_retention_loop())
+        except RuntimeError:
+            pass
+
+    async def _log_retention_loop(self):
+        """
+        Periodically clean up log files older than 48 hours.
+        Runs entirely in a background executor with asyncio.sleep between checks,
+        ensuring it NEVER blocks the event loop, socket messages, or heartbeats.
+        """
+        logger.info("[ProcessManager] Log retention supervisor started (TTL: 48 hours).")
+        while True:
+            try:
+                # Run the blocking filesystem operations in a thread pool executor
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._cleanup_expired_logs_sync, 48.0)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"[ProcessManager] Error in log retention check: {e}")
+
+            # Sleep 6 hours between checks
+            try:
+                await asyncio.sleep(6 * 3600)
+            except asyncio.CancelledError:
+                break
+
+    def _cleanup_expired_logs_sync(self, max_age_hours: float = 48.0):
+        """
+        Scan farmer_bin/logs and delete files whose mtime is older than max_age_hours.
+        Also truncate system-logs.txt if it exceeds 10 MB.
+        Synchronous method designed to run inside ThreadPoolExecutor.
+        """
+        logs_dirs = [self.bin_dir / 'logs', self.bin_dir / 'Logs']
+        now = time.time()
+        max_age_seconds = max_age_hours * 3600.0
+
+        deleted_count = 0
+        freed_bytes = 0
+
+        for l_dir in logs_dirs:
+            if not l_dir.exists() or not l_dir.is_dir():
+                continue
+
+            try:
+                for entry in l_dir.iterdir():
+                    if not entry.is_file():
+                        continue
+
+                    # Rotate account log files
+                    if entry.name.startswith("logs-TwitchUser-") and entry.suffix == ".log":
+                        try:
+                            stat = entry.stat()
+                            age = now - stat.st_mtime
+                            if age > max_age_seconds:
+                                freed_bytes += stat.st_size
+                                entry.unlink(missing_ok=True)
+                                deleted_count += 1
+                        except Exception as e:
+                            logger.debug(f"Could not remove old log {entry.name}: {e}")
+
+                    # Truncate oversized system-logs.txt (> 10 MB -> keep last 500 KB)
+                    elif entry.name == "system-logs.txt":
+                        try:
+                            stat = entry.stat()
+                            if stat.st_size > 10 * 1024 * 1024:
+                                self._truncate_log_file(entry, keep_bytes=500 * 1024)
+                        except Exception as e:
+                            logger.debug(f"Could not check system-logs.txt size: {e}")
+
+            except Exception as e:
+                logger.debug(f"Error scanning logs dir {l_dir}: {e}")
+
+        if deleted_count > 0:
+            freed_mb = freed_bytes / (1024 * 1024)
+            logger.info(
+                f"[ProcessManager] Log retention cleanup: removed {deleted_count} expired log file(s) "
+                f"(older than {int(max_age_hours)}h), freed {freed_mb:.2f} MB."
+            )
+
+    @staticmethod
+    def _truncate_log_file(file_path: Path, keep_bytes: int = 500 * 1024):
+        """Keep only the tail of an oversized log file safely."""
+        try:
+            with open(file_path, "rb") as f:
+                f.seek(-keep_bytes, 2)
+                tail_data = f.read()
+            with open(file_path, "wb") as f:
+                f.write(tail_data)
+            logger.info(f"[ProcessManager] Truncated {file_path.name} to last {keep_bytes // 1024} KB.")
+        except Exception as e:
+            logger.debug(f"Failed to truncate {file_path}: {e}")
+
