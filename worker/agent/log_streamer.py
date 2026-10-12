@@ -28,7 +28,7 @@ class LogStreamer:
         self.campaign_drop_re = re.compile(r'Current drop campaign\s*:\s*([^,\(\n\r]+)', re.IGNORECASE)
         self.checking_campaign_re = re.compile(r'Checking\s+"[^"]+"\s*\("([^"]+)"\)', re.IGNORECASE)
         self.campaign_completed_re = re.compile(
-            r'Campaign\s+["\']?([^"\']+)["\']?\s*(?:is\s+100%\s+completed|already\s+completed|completed)', 
+            r'(?:\[Status\]\s*)?Campaign\s+["\']?([^"\']+)["\']?\s*(?:is\s+100%\s+completed|already\s+completed)', 
             re.IGNORECASE
         )
         self.stream_inactive_re = re.compile(
@@ -58,7 +58,8 @@ class LogStreamer:
         # 3. Streamer patterns (STRICT: only actual stream watch / events)
         self.st_spade_re = re.compile(r'SendSpadeEvents accepted for "([^"]+)"', re.IGNORECASE)
         self.st_watching_pipe_re = re.compile(r'watching\s+([a-zA-Z0-9_]{3,25})\s*\|', re.IGNORECASE)
-        self.st_priority_re = re.compile(r'Selected priority channel "([^"]+)"', re.IGNORECASE)
+        self.st_priority_re = re.compile(r'Selected priority channel\s+["\']?([^"\'\.\s]+)', re.IGNORECASE)
+        self.st_switched_re = re.compile(r'Broadcaster switched from \S+ to ([a-zA-Z0-9_]{3,25})', re.IGNORECASE)
         self.st_watching_quotes_re = re.compile(r'watching\s+"([^"]+)"', re.IGNORECASE)
 
     def parse_logs(self, logs: str) -> dict:
@@ -77,7 +78,7 @@ class LogStreamer:
 
         spade_count = 0
         new_campaign_detected = None
-        campaign_completed_detected = False
+        completed_campaigns = set()
         claims_map = {}
         last_active_watch_line = -1
         last_inactive_line = -1
@@ -87,9 +88,12 @@ class LogStreamer:
             if not line_str:
                 continue
 
-            # Check if previous campaign completed
-            if self.campaign_completed_re.search(line_str) or ('removing' in line_str.lower() and 'finished campaigns' in line_str.lower()):
-                campaign_completed_detected = True
+            # Check if specific campaign is logged as completed
+            comp_match = self.campaign_completed_re.search(line_str)
+            if comp_match:
+                c_comp_name = comp_match.group(1).strip(' "\'[]:-,')
+                if c_comp_name:
+                    completed_campaigns.add(c_comp_name.lower())
 
             # Check if stream/broadcaster is inactive or waiting
             if self.stream_inactive_re.search(line_str):
@@ -191,6 +195,7 @@ class LogStreamer:
                 self.st_spade_re.search(line_str) or 
                 self.st_watching_pipe_re.search(line_str) or 
                 self.st_priority_re.search(line_str) or
+                self.st_switched_re.search(line_str) or
                 self.st_watching_quotes_re.search(line_str)
             )
             if st_match:
@@ -293,7 +298,13 @@ class LogStreamer:
         req_m = telemetry.get('target_minutes', 0)
         is_100_percent = (pct >= 100) or (req_m > 0 and watched_m >= req_m)
 
-        if (campaign_completed_detected or is_100_percent) and not telemetry.get('is_actively_watching'):
+        current_camp = (telemetry.get('campaign_name') or new_campaign_detected or '').lower()
+        is_current_campaign_completed = bool(current_camp and current_camp in completed_campaigns)
+
+        # An account with 0 progress and target_minutes > 0 has just started and cannot be completed
+        has_zero_progress = (req_m > 0 and watched_m == 0 and pct == 0)
+
+        if not has_zero_progress and (is_100_percent or is_current_campaign_completed) and not telemetry.get('is_actively_watching'):
             telemetry['is_completed'] = True
             telemetry['active_streamer'] = None
         else:
