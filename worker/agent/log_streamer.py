@@ -53,6 +53,9 @@ class LogStreamer:
             r'\[Claim\]\s*Claim of\s*[\'"]([^\'"]+)[\'"]\s*for\s*[\'"]([^\'"]+)[\'"]\s*is unconfirmed',
             re.IGNORECASE
         )
+        self.checking_game_camp_re = re.compile(r'Checking\s+["\']?([^"\'\(\)]+)["\']?\s*\([\'"]?([^"\'\)]+)[\'"]?\)', re.IGNORECASE)
+        self.current_camp_game_re = re.compile(r'Current drop campaign\s*:\s*([^,\(\n\r]+)\s*\(([^,\)\n\r]+)\)', re.IGNORECASE)
+        self.campaign_to_game = {}
         self.drop_campaign_cache = {}
 
         # 3. Streamer patterns (STRICT: only actual stream watch / events)
@@ -100,10 +103,28 @@ class LogStreamer:
             if self.stream_inactive_re.search(line_str):
                 last_inactive_line = line_idx
 
-            # Check campaign checking lines: Checking "NARAKA: BLADEPOINT" ("JS1 PARTNER? 7.30")...
-            chk_match = self.checking_campaign_re.search(line_str)
-            if chk_match:
-                new_campaign_detected = chk_match.group(1).strip(' "\'[]:-,')
+            # Check Checking <Game> (<Campaign>)
+            chkg_match = self.checking_game_camp_re.search(line_str)
+            if chkg_match:
+                g_chk = chkg_match.group(1).strip(' "\'[]:-,')
+                c_chk = chkg_match.group(2).strip(' "\'[]:-,')
+                if g_chk and c_chk:
+                    self.campaign_to_game[c_chk.lower()] = g_chk
+                    new_campaign_detected = c_chk
+            else:
+                chk_match = self.checking_campaign_re.search(line_str)
+                if chk_match:
+                    new_campaign_detected = chk_match.group(1).strip(' "\'[]:-,')
+
+            # Check Current drop campaign: <Campaign> (<Game>)
+            currc_match = self.current_camp_game_re.search(line_str)
+            if currc_match:
+                c_curr = currc_match.group(1).strip(' "\'[]:-,')
+                g_curr = currc_match.group(2).strip(' "\'[]:-,')
+                if c_curr and g_curr:
+                    self.campaign_to_game[c_curr.lower()] = g_curr
+                    if not new_campaign_detected:
+                        new_campaign_detected = c_curr
 
             # 1. Explicit Progress parsing (Campaign total prioritized, then fallback to single drop)
             if not any(ign in line_str.lower() for ign in ['group of channels', 'trying next group', 'finished campaigns', 'watching 100 seconds', 'watching 1999']):
@@ -279,10 +300,15 @@ class LogStreamer:
                     telemetry.get("campaign_name") or
                     new_campaign_detected
                 )
+                g_name = (
+                    item.get("game_name") or
+                    (self.campaign_to_game.get(c_name.lower()) if c_name else None)
+                )
                 claimed_drops_list.append({
                     "drop_name": item["drop_name"],
                     "drop_id": item.get("drop_id"),
-                    "campaign_name": c_name
+                    "campaign_name": c_name,
+                    "game_name": g_name
                 })
         if claimed_drops_list:
             telemetry['claimed_drops'] = claimed_drops_list
