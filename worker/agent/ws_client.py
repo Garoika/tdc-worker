@@ -255,7 +255,9 @@ class WebSocketClient:
     async def handle_stop_container(self, msg: dict):
         cid = msg.get('container_id')
         job_id = msg.get('job_id')
-        success = await self.runner.stop_container(cid, job_id=job_id)
+        account_id = msg.get('account_id')
+        login = msg.get('login')
+        success = await self.runner.stop_container(cid, job_id=job_id, account_id=account_id, login=login)
         await self.send({
             "type": "CONTAINER_EVENT",
             "job_id": job_id,

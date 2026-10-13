@@ -180,7 +180,7 @@ class ProcessManager:
             )
         return removed
 
-    async def stop_container(self, container_id: str = None, job_id: str = None) -> bool:
+    async def stop_container(self, container_id: str = None, job_id: str = None, account_id: str = None, login: str = None) -> bool:
         """Unregister a job/account and trigger single-process reload."""
         async with self._lock:
             target_jid = None
@@ -194,19 +194,33 @@ class ProcessManager:
                         break
             elif job_id:
                 for jid in self.active_jobs:
-                    if jid.startswith(job_id[:8]) or jid == job_id:
+                    if jid.startswith(str(job_id)[:8]) or jid == str(job_id):
+                        target_jid = jid
+                        break
+
+            # Fallback match by account_id
+            if not target_jid and account_id:
+                for jid, info in self.active_jobs.items():
+                    if str(info.get('account', {}).get('id', '')) == str(account_id):
+                        target_jid = jid
+                        break
+
+            # Fallback match by login
+            if not target_jid and login:
+                for jid, info in self.active_jobs.items():
+                    if (info.get('login') or '').lower() == str(login).lower():
                         target_jid = jid
                         break
 
             if target_jid and target_jid in self.active_jobs:
-                login = self.active_jobs[target_jid]['login']
+                acc_login = self.active_jobs[target_jid].get('login', target_jid)
                 del self.active_jobs[target_jid]
                 state_manager.update_jobs(self.active_jobs)
-                logger.info(f"[ProcessManager] Removed account {login} (job {target_jid[:8]}). Remaining: {len(self.active_jobs)}")
+                logger.info(f"[ProcessManager] Removed account {acc_login} (job {target_jid[:8]}). Remaining: {len(self.active_jobs)}")
                 self._schedule_debounced_restart(delay=1.5)
                 return True
             else:
-                logger.debug(f"[ProcessManager] stop_container: job not found for cid={container_id}, jid={job_id}")
+                logger.debug(f"[ProcessManager] stop_container: job not found for cid={container_id}, jid={job_id}, acc={account_id}, login={login}")
                 return False
 
     async def stop_all(self):
