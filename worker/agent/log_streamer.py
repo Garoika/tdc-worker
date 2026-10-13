@@ -39,8 +39,9 @@ class LogStreamer:
         
         # 2b. Claim patterns from C# bot (multi-campaign claim detection)
         # e.g.: [Claim] Claiming drop 'DropName' (ID: DropInstanceID) for 'CampaignName'...
+        # e.g.: [Claim] Earned drop 'DropName' (ID: DropInstanceID) for 'CampaignName' [GameName]
         self.claim_intent_re = re.compile(
-            r'\[Claim\]\s*Claiming drop\s*[\'"]([^\'"]+)[\'"]\s*(?:\(ID:\s*([^\'\)]+)\))?\s*for\s*[\'"]([^\'"]+)[\'"]',
+            r'\[Claim\]\s*(?:Claiming|Earned)\s*drop\s*[\'"]([^\'"]+)[\'"]\s*(?:\(ID:\s*([^\'\)]*)\))?\s*for\s*[\'"]([^\'"]+)[\'"](?:\s*\[([^\]]+)\])?',
             re.IGNORECASE
         )
         # e.g.: [Claim] Successfully claimed drop 'DropName'!
@@ -237,21 +238,30 @@ class LogStreamer:
                 d_name = ci_match.group(1).strip()
                 d_id = ci_match.group(2).strip() if ci_match.group(2) else None
                 c_name = ci_match.group(3).strip()
+                g_name = ci_match.group(4).strip() if (ci_match.lastindex and ci_match.lastindex >= 4 and ci_match.group(4)) else None
                 key = d_name.lower()
                 if c_name:
                     self.drop_campaign_cache[key] = c_name
+                if c_name and g_name:
+                    self.campaign_to_game[c_name.lower()] = g_name
+                is_earned_line = "earned drop" in line_str.lower()
                 if key not in claims_map:
                     claims_map[key] = {
                         "drop_name": d_name,
                         "drop_id": d_id,
                         "campaign_name": c_name,
-                        "confirmed": False
+                        "game_name": g_name,
+                        "confirmed": True if is_earned_line else False
                     }
                 else:
                     if c_name:
                         claims_map[key]["campaign_name"] = c_name
                     if d_id:
                         claims_map[key]["drop_id"] = d_id
+                    if g_name:
+                        claims_map[key]["game_name"] = g_name
+                    if is_earned_line:
+                        claims_map[key]["confirmed"] = True
 
             cs_match = self.claim_success_re.search(line_str)
             if cs_match:
