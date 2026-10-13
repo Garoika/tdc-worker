@@ -383,6 +383,25 @@ class ProcessManager:
             env = os.environ.copy()
             env['INSIDE_DOCKER'] = 'true'
 
+            # Auto-detect local network proxy (192.168.1.100:8080) to bypass ISP DPI blocks on Twitch
+            if not env.get('HTTP_PROXY') and not env.get('http_proxy'):
+                try:
+                    import socket
+                    _s = socket.socket()
+                    _s.settimeout(0.3)
+                    if _s.connect_ex(('192.168.1.100', 8080)) == 0:
+                        logger.info("🛡️ [ProcessManager] Local proxy 192.168.1.100:8080 detected! Enabling for farmer to bypass DPI...")
+                        env['HTTP_PROXY'] = 'http://192.168.1.100:8080'
+                        env['HTTPS_PROXY'] = 'http://192.168.1.100:8080'
+                        env['http_proxy'] = 'http://192.168.1.100:8080'
+                        env['https_proxy'] = 'http://192.168.1.100:8080'
+                        env['ALL_PROXY'] = 'http://192.168.1.100:8080'
+                        env['NO_PROXY'] = 'localhost,127.0.0.1,192.168.1.0/24,185.104.248.62'
+                        env['no_proxy'] = 'localhost,127.0.0.1,192.168.1.0/24,185.104.248.62'
+                    _s.close()
+                except Exception as _e:
+                    logger.debug(f"[ProcessManager] Local proxy check failed: {_e}")
+
             cmd = self._get_launch_cmd()
             logger.info(f"[ProcessManager] Launching native TwitchDropsBot: {' '.join(cmd)}")
             self.process = subprocess.Popen(
