@@ -239,9 +239,9 @@ class LogStreamer:
                 d_id = ci_match.group(2).strip() if ci_match.group(2) else None
                 c_name = ci_match.group(3).strip()
                 g_name = ci_match.group(4).strip() if (ci_match.lastindex and ci_match.lastindex >= 4 and ci_match.group(4)) else None
-                key = d_name.lower()
+                key = f"{c_name.lower()}::{d_name.lower()}" if c_name else d_name.lower()
                 if c_name:
-                    self.drop_campaign_cache[key] = c_name
+                    self.drop_campaign_cache[d_name.lower()] = c_name
                 if c_name and g_name:
                     self.campaign_to_game[c_name.lower()] = g_name
                 is_earned_line = "earned drop" in line_str.lower()
@@ -266,25 +266,28 @@ class LogStreamer:
             cs_match = self.claim_success_re.search(line_str)
             if cs_match:
                 d_name = cs_match.group(1).strip()
-                key = d_name.lower()
-                if key in claims_map:
-                    claims_map[key]["confirmed"] = True
-                else:
-                    cached_camp = self.drop_campaign_cache.get(key)
-                    claims_map[key] = {
-                        "drop_name": d_name,
-                        "drop_id": None,
-                        "campaign_name": cached_camp,
-                        "confirmed": True
-                    }
+                matched = False
+                for k, v in claims_map.items():
+                    if v.get("drop_name", "").lower() == d_name.lower():
+                        v["confirmed"] = True
+                        matched = True
+                if not matched:
+                    cached_camp = self.drop_campaign_cache.get(d_name.lower())
+                    if cached_camp:
+                        claims_map[f"{cached_camp.lower()}::{d_name.lower()}"] = {
+                            "drop_name": d_name,
+                            "drop_id": None,
+                            "campaign_name": cached_camp,
+                            "confirmed": True
+                        }
 
             cu_match = self.claim_unconfirmed_re.search(line_str)
             if cu_match:
                 d_name = cu_match.group(1).strip()
                 c_name = cu_match.group(2).strip()
-                key = d_name.lower()
+                key = f"{c_name.lower()}::{d_name.lower()}" if c_name else d_name.lower()
                 if c_name:
-                    self.drop_campaign_cache[key] = c_name
+                    self.drop_campaign_cache[d_name.lower()] = c_name
                 if key not in claims_map:
                     claims_map[key] = {
                         "drop_name": d_name,
@@ -295,21 +298,17 @@ class LogStreamer:
                 else:
                     if c_name:
                         claims_map[key]["campaign_name"] = c_name
+                    claims_map[key]["confirmed"] = True
 
         # If campaign changed to a new one
         if new_campaign_detected and 'campaign_name' not in telemetry:
             telemetry['campaign_name'] = new_campaign_detected
 
-        # Multi-campaign claimed drops list
+        # Multi-campaign claimed drops list (STRICT: only verified drops with explicit campaign)
         claimed_drops_list = []
         for item in claims_map.values():
-            if item.get("drop_name"):
-                c_name = (
-                    item.get("campaign_name") or
-                    self.drop_campaign_cache.get(item["drop_name"].lower()) or
-                    telemetry.get("campaign_name") or
-                    new_campaign_detected
-                )
+            if item.get("confirmed") and item.get("drop_name") and item.get("campaign_name"):
+                c_name = item["campaign_name"]
                 g_name = (
                     item.get("game_name") or
                     (self.campaign_to_game.get(c_name.lower()) if c_name else None)
