@@ -142,6 +142,17 @@ class ProcessManager:
 
         async with self._lock:
             if job_id in self.active_jobs:
+                current_target = self.active_jobs[job_id].get('target', {})
+                current_streamers = current_target.get('priority_streamers', [])
+                new_streamers = target.get('priority_streamers', [])
+                if current_streamers != new_streamers or current_target.get('game') != target.get('game'):
+                    logger.info(f"[ProcessManager] Updating target for existing job {job_id[:8]} ({target.get('game')}, streamers: {new_streamers})")
+                    self.active_jobs[job_id]['target'] = target
+                    self.active_jobs[job_id]['account'] = account
+                    self.active_jobs[job_id]['limits'] = limits
+                    self.active_jobs[job_id]['game'] = target.get('game', '')
+                    state_manager.update_jobs(self.active_jobs)
+                    self._schedule_debounced_restart(delay=1.5)
                 return f"proc_{job_id[:8]}"
             if len(self.active_jobs) >= self.max_containers:
                 raise WorkerCapacityError(

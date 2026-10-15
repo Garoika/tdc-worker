@@ -24,3 +24,4 @@ farmer_bin/Configuration/
 farmer_bin/appsettings.Development.json
 
 worker/.worker_state.json
+worker/.monitor.pid
