@@ -553,6 +553,8 @@ class ProcessManager:
 
         if target_login and logs_dir.exists():
             user_log_file = logs_dir / f"logs-TwitchUser-{target_login}.log"
+            if not user_log_file.exists():
+                user_log_file = logs_dir / f"logs-TwitchUser-{target_login.lower()}.log"
             if user_log_file.exists():
                 try:
                     with open(user_log_file, 'r', encoding='utf-8', errors='ignore') as f:
@@ -579,8 +581,8 @@ class ProcessManager:
         lines = list(self.log_buffer)
 
         if target_login:
-            tag = f"[TwitchUser - {target_login}]"
-            user_lines = [line for line in lines if tag in line]
+            tag = f"[TwitchUser - {target_login}]".lower()
+            user_lines = [line for line in lines if tag in line.lower()]
             if tail > 0:
                 user_lines = user_lines[-tail:]
             return "\n".join(user_lines)
