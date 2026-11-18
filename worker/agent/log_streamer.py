@@ -341,24 +341,28 @@ class LogStreamer:
         camp_watched = telemetry.get('campaign_watched', 0)
         camp_total = telemetry.get('campaign_total', 0)
 
-        # STRICT: If there are unfinished drops in the active campaign, it CANNOT be completed!
-        has_unfinished_drops = (drop_idx is not None and drop_tot is not None and drop_tot > 0 and drop_idx < drop_tot)
-        has_unfinished_minutes = (camp_total > 0 and camp_watched < camp_total) or (camp_pct is not None and camp_pct < 100)
-
-        current_camp = (telemetry.get('campaign_name') or new_campaign_detected or '').lower()
-        is_current_campaign_completed = bool(current_camp and current_camp in completed_campaigns)
-
         pct = telemetry.get('percentage', 0)
         watched_m = telemetry.get('watched_minutes', 0)
         req_m = telemetry.get('target_minutes', 0)
         is_100_percent = (pct >= 100) or (req_m > 0 and watched_m >= req_m)
+
+        # STRICT: If there are unfinished drops in the active campaign, it CANNOT be completed!
+        all_drops_claimed = bool(drop_idx is not None and drop_tot is not None and drop_tot > 0 and drop_idx >= drop_tot and is_100_percent)
+        has_unfinished_drops = (drop_idx is not None and drop_tot is not None and drop_tot > 0 and drop_idx < drop_tot)
+        if all_drops_claimed:
+            has_unfinished_minutes = False
+        else:
+            has_unfinished_minutes = (camp_total > 0 and (camp_total - camp_watched) > 1) or (camp_pct is not None and camp_pct < 100)
+
+        current_camp = (telemetry.get('campaign_name') or new_campaign_detected or '').lower()
+        is_current_campaign_completed = bool(current_camp and current_camp in completed_campaigns)
 
         # An account with 0 progress and target_minutes > 0 has just started and cannot be completed
         has_zero_progress = (req_m > 0 and watched_m == 0 and pct == 0)
 
         if has_unfinished_drops or has_unfinished_minutes or has_zero_progress:
             telemetry['is_completed'] = False
-        elif (is_current_campaign_completed or (is_100_percent and (drop_tot is None or drop_idx is None or drop_idx >= drop_tot))) and not telemetry.get('is_actively_watching'):
+        elif (is_current_campaign_completed or all_drops_claimed or (is_100_percent and (drop_tot is None or drop_idx is None or drop_idx >= drop_tot))) and not telemetry.get('is_actively_watching'):
             telemetry['is_completed'] = True
             telemetry['active_streamer'] = None
         else:
