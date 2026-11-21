@@ -153,6 +153,7 @@ pub fn record_telemetry(
     drop_tot: i32,
     streamer: Option<&str>,
     is_watching: bool,
+    drop_name: Option<&str>,
 ) {
     if let Ok(mut t) = get_tracker().lock() {
         let entry = t.accounts.entry(login.to_string()).or_insert_with(|| AccountTelemetryState {
@@ -196,9 +197,24 @@ pub fn record_telemetry(
             String::new()
         };
 
+        let drop_label = if let Some(dn) = drop_name {
+            let lower = dn.trim().to_lowercase();
+            if !lower.is_empty() && !lower.starts_with("drop ") && lower != "drop" {
+                if drop_tot > 1 {
+                    format!("{} ({}/{})", dn, drop_idx, drop_tot)
+                } else {
+                    dn.to_string()
+                }
+            } else {
+                format!("Drop {}/{}", drop_idx, drop_tot)
+            }
+        } else {
+            format!("Drop {}/{}", drop_idx, drop_tot)
+        };
+
         let evt_text = format!(
-            "[{}] {} -> {}: {}/{}m (Drop {}/{}){}",
-            now_hms, login, game, camp_watched, entry.required_mins, drop_idx, drop_tot, st_str
+            "[{}] {} -> {}: {}/{}m ({}){}",
+            now_hms, login, game, camp_watched, entry.required_mins, drop_label, st_str
         );
 
         if t.recent_events.first() != Some(&evt_text) {

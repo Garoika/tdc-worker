@@ -29,8 +29,7 @@ pub fn enable_windows_ansi() {
                 // 0x0001 = ENABLE_PROCESSED_OUTPUT
                 // 0x0002 = ENABLE_WRAP_AT_EOL_OUTPUT
                 // 0x0004 = ENABLE_VIRTUAL_TERMINAL_PROCESSING
-                // 0x0008 = DISABLE_NEWLINE_AUTO_RETURN
-                SetConsoleMode(handle, mode | 0x0001 | 0x0002 | 0x0004 | 0x0008);
+                SetConsoleMode(handle, mode | 0x0001 | 0x0002 | 0x0004);
             }
         }
         let title: Vec<u16> = "TDC Cluster \u{2014} Live Worker Monitor\0".encode_utf16().collect();
@@ -263,8 +262,8 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
 
         let mut lines = Vec::new();
 
-        // Exact box geometry matching legacy Python monitor
-        let box_w = cols;
+        // Exact box geometry matching legacy Python monitor with 1-cell safety margin against terminal EOL auto-wrap
+        let box_w = cols.saturating_sub(1);
         let inner_w = box_w.saturating_sub(4).max(20);
 
         let title = "TDC WORKER \u{2014} LIVE MONITOR DASHBOARD";

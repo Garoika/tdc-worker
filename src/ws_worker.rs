@@ -238,6 +238,7 @@ async fn connect_and_serve(
                         telemetry.drop_total,
                         telemetry.active_streamer.as_deref(),
                         telemetry.is_actively_watching,
+                        Some(telemetry.drop_name.as_str()),
                     );
                     let (ram_u, ram_t) = get_system_ram_mb();
                     crate::state_writer::save_state_to_disk(ram_u, ram_t);
