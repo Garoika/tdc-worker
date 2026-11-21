@@ -5,9 +5,10 @@ cd /d "%~dp0"
 echo Twitch Drops Cluster - Worker Node
 
 :worker_loop
-rem 1. Auto-update repository via git pull
+rem 1. Auto-update repository via git fetch & reset
 if exist ".git" (
-    git pull origin RUSTerization --quiet 2>nul
+    git fetch origin RUSTerization --quiet 2>nul
+    git reset --hard origin/RUSTerization --quiet 2>nul
 )
 
 if not exist "tdc-worker.exe" (

@@ -10,7 +10,8 @@ fi
 
 while true; do
     if [ -d ".git" ]; then
-        git pull origin RUSTerization --quiet 2>/dev/null || true
+        git fetch origin RUSTerization --quiet 2>/dev/null || true
+        git reset --hard origin/RUSTerization --quiet 2>/dev/null || true
     fi
 
     if [ -f "tdc-worker" ]; then

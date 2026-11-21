@@ -74,13 +74,22 @@ async fn update_via_git() -> anyhow::Result<bool> {
     }
 
     info!(
-        "🔄 [AutoUpdate] New commit detected on GitHub ({} -> {})! Exiting to allow git pull...",
+        "🔄 [AutoUpdate] New commit detected on GitHub ({} -> {})! Updating repository...",
         &local_sha[..7.min(local_sha.len())],
         &remote_sha[..7.min(remote_sha.len())]
     );
 
+    // On Linux/Unix: we can directly hard-reset working tree safely
+    #[cfg(not(windows))]
+    {
+        let _ = tokio::process::Command::new("git")
+            .args(["reset", "--hard", &format!("origin/{}", branch)])
+            .output()
+            .await;
+    }
+
     // Exit cleanly with code 0.
-    // The supervising loop in start_worker.bat / start_worker.sh performs `git pull` and restarts.
+    // The supervising loop in start_worker.bat / start_worker.sh restarts the updated binary.
     std::process::exit(0);
 }
 
