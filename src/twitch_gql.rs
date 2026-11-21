@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 use anyhow::{Context, Result, anyhow};
 use reqwest::header::{HeaderMap, HeaderValue, HeaderName};
 use serde_json::{json, Value};
-use crate::models::{DropCurrentSession, PlaybackToken, StreamerChannel};
+use crate::models::{CampaignProgressInfo, DropCurrentSession, PlaybackToken, StreamerChannel};
 
 pub const TWITCH_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 pub const GQL_URL: &str = "https://gql.twitch.tv/gql";
@@ -221,6 +221,197 @@ impl TwitchGqlClient {
             channel_login,
             game_name,
         }))
+    }
+
+    pub async fn fetch_inventory_campaign_progress(
+        &self,
+        auth_token: &str,
+        target_game: &str,
+    ) -> Result<Option<CampaignProgressInfo>> {
+        let body = json!({
+            "query": r#"query InventoryQuery {
+              currentUser {
+                inventory {
+                  dropCampaignsInProgress {
+                    id
+                    name
+                    status
+                    game {
+                      id
+                      name
+                    }
+                    timeBasedDrops {
+                      id
+                      name
+                      requiredMinutesWatched
+                      self {
+                        isClaimed
+                        currentMinutesWatched
+                      }
+                    }
+                  }
+                }
+              }
+            }"#
+        });
+
+        let resp = self.http.post(GQL_URL)
+            .headers(Self::headers(auth_token))
+            .json(&body)
+            .send()
+            .await
+            .context("Error requesting InventoryQuery")?;
+
+        let json_val: Value = resp.json().await.context("Invalid InventoryQuery response")?;
+        let campaigns = match json_val.pointer("/data/currentUser/inventory/dropCampaignsInProgress") {
+            Some(Value::Array(arr)) => arr,
+            _ => return Ok(None),
+        };
+
+        let target_clean = target_game.trim().to_lowercase();
+        let mut matched_campaign = None;
+        for c in campaigns {
+            let g_name = c.pointer("/game/name").and_then(|v| v.as_str()).unwrap_or_default().to_lowercase();
+            let c_name = c.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_lowercase();
+
+            if (!g_name.is_empty() && (g_name.contains(&target_clean) || target_clean.contains(&g_name)))
+                || (!c_name.is_empty() && (c_name.contains(&target_clean) || target_clean.contains(&c_name)))
+            {
+                matched_campaign = Some(c);
+                break;
+            }
+        }
+
+        let c = match matched_campaign {
+            Some(camp) => camp,
+            None => return Ok(None),
+        };
+
+        let campaign_name = c.get("name").and_then(|v| v.as_str()).unwrap_or("Drops Campaign").to_string();
+        let drops = match c.get("timeBasedDrops").and_then(|v| v.as_array()) {
+            Some(d) if !d.is_empty() => d,
+            _ => return Ok(None),
+        };
+
+        let is_cumulative = drops.len() > 1 && {
+            let req0 = drops[0].get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0);
+            let req1 = drops[1].get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0);
+            req1 > req0
+        };
+
+        if is_cumulative {
+            let last_req = drops.last()
+                .and_then(|d| d.get("requiredMinutesWatched"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as i32;
+            let campaign_total = last_req.max(1);
+
+            let mut max_watched = 0;
+            for d in drops {
+                let w = d.pointer("/self/currentMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                if w > max_watched {
+                    max_watched = w;
+                }
+            }
+            let campaign_watched = max_watched.min(campaign_total);
+            let campaign_percentage = ((campaign_watched as f64 / campaign_total as f64) * 100.0).round() as i32;
+
+            let mut active_drop_name = drops[0].get("name").and_then(|v| v.as_str()).unwrap_or("Drop 1").to_string();
+            let mut drop_index = 1;
+            let first_req = drops[0].get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(60) as i32;
+            let mut drop_required = first_req;
+            let mut drop_watched = campaign_watched.min(drop_required);
+
+            let mut all_done = true;
+            for (i, d) in drops.iter().enumerate() {
+                let req = d.get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let cur = d.pointer("/self/currentMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let is_claimed = d.pointer("/self/isClaimed").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                let prev_req = if i == 0 {
+                    0
+                } else {
+                    drops[i - 1].get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32
+                };
+                let cur_segment_req = (req - prev_req).max(1);
+
+                if !is_claimed && cur < req {
+                    all_done = false;
+                    active_drop_name = d.get("name").and_then(|v| v.as_str()).unwrap_or("Drop").to_string();
+                    drop_index = (i + 1) as i32;
+                    drop_required = cur_segment_req;
+                    drop_watched = (campaign_watched - prev_req).max(0).min(drop_required);
+                    break;
+                } else if i == drops.len() - 1 {
+                    active_drop_name = d.get("name").and_then(|v| v.as_str()).unwrap_or("Drop").to_string();
+                    drop_index = drops.len() as i32;
+                    drop_required = cur_segment_req;
+                    drop_watched = cur_segment_req;
+                    if !is_claimed && cur < req {
+                        all_done = false;
+                    }
+                }
+            }
+
+            Ok(Some(CampaignProgressInfo {
+                campaign_name,
+                campaign_watched,
+                campaign_total,
+                campaign_percentage: campaign_percentage.min(100),
+                drop_name: active_drop_name,
+                drop_watched,
+                drop_required,
+                drop_index,
+                drop_total: drops.len() as i32,
+                is_completed: all_done || campaign_watched >= campaign_total,
+            }))
+        } else {
+            let mut campaign_total = 0;
+            let mut campaign_watched = 0;
+            let mut all_done = true;
+            let mut active_idx = 1;
+            let mut active_name = drops[0].get("name").and_then(|v| v.as_str()).unwrap_or("Drop 1").to_string();
+            let mut active_req = drops[0].get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(60) as i32;
+            let mut active_watched = drops[0].pointer("/self/currentMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let mut found_active = false;
+
+            for (i, d) in drops.iter().enumerate() {
+                let req = d.get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let cur = d.pointer("/self/currentMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let is_claimed = d.pointer("/self/isClaimed").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                campaign_total += req;
+                campaign_watched += cur.min(req);
+
+                if !found_active && !is_claimed && cur < req {
+                    found_active = true;
+                    active_idx = (i + 1) as i32;
+                    active_name = d.get("name").and_then(|v| v.as_str()).unwrap_or("Drop").to_string();
+                    active_req = req;
+                    active_watched = cur;
+                }
+
+                if !is_claimed && cur < req {
+                    all_done = false;
+                }
+            }
+
+            campaign_total = campaign_total.max(1);
+            let campaign_percentage = ((campaign_watched as f64 / campaign_total as f64) * 100.0).round() as i32;
+
+            Ok(Some(CampaignProgressInfo {
+                campaign_name,
+                campaign_watched,
+                campaign_total,
+                campaign_percentage: campaign_percentage.min(100),
+                drop_name: active_name,
+                drop_watched: active_watched,
+                drop_required: active_req,
+                drop_index: active_idx,
+                drop_total: drops.len() as i32,
+                is_completed: all_done || campaign_watched >= campaign_total,
+            }))
+        }
     }
 
     pub async fn verify_channel_drops(&self, auth_token: &str, channel_id: &str, target_game: &str) -> bool {

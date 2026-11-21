@@ -138,21 +138,45 @@ pub async fn run_account_worker(
                                     let chosen_channel = chosen.login.clone();
                                     current_streamer = Some(chosen);
 
-                                    let mut init_mins = 0;
-                                    let mut init_req = 0;
+                                    let mut init_camp_name = format!("{} Drop", target_game);
+                                    let mut init_drop_name = "Connecting...".to_string();
+                                    let mut init_drop_watched = 0;
+                                    let mut init_drop_required = 60;
+                                    let mut init_camp_watched = 0;
+                                    let mut init_camp_total = 60;
                                     let mut init_pct = 0.0;
-                                    let mut init_title = "Connecting...".to_string();
+                                    let mut init_drop_idx = 1;
+                                    let mut init_drop_tot = 1;
+                                    let mut init_completed = false;
 
-                                    if let Ok(Some(session)) = gql.fetch_current_session(&account.auth_token, &chosen_channel).await {
-                                        init_mins = session.current_minutes_watched;
-                                        init_req = session.required_minutes_watched;
-                                        if init_req > 0 {
-                                            init_pct = (init_mins as f32 / init_req as f32) * 100.0;
-                                        }
-                                        init_title = format!("{} Drop", session.game_name.as_deref().unwrap_or(&target_game));
+                                    if let Ok(Some(camp_info)) = gql.fetch_inventory_campaign_progress(&account.auth_token, &target_game).await {
+                                        init_camp_name = camp_info.campaign_name;
+                                        init_drop_name = camp_info.drop_name;
+                                        init_drop_watched = camp_info.drop_watched;
+                                        init_drop_required = camp_info.drop_required;
+                                        init_camp_watched = camp_info.campaign_watched;
+                                        init_camp_total = camp_info.campaign_total;
+                                        init_pct = camp_info.campaign_percentage as f32;
+                                        init_drop_idx = camp_info.drop_index;
+                                        init_drop_tot = camp_info.drop_total;
+                                        init_completed = camp_info.is_completed;
                                         info!(
-                                            "[{}] Initial Progress: {} | {}/{} mins ({:.1}%)",
-                                            acc_tag, init_title, init_mins, init_req, init_pct
+                                            "[{}] Initial Progress: {} (Drop {}/{}) | {}/{} mins (Campaign: {}/{} mins, {:.1}%)",
+                                            acc_tag, init_drop_name, init_drop_idx, init_drop_tot, init_drop_watched, init_drop_required, init_camp_watched, init_camp_total, init_pct
+                                        );
+                                    } else if let Ok(Some(session)) = gql.fetch_current_session(&account.auth_token, &chosen_channel).await {
+                                        init_drop_watched = session.current_minutes_watched;
+                                        init_drop_required = session.required_minutes_watched;
+                                        init_camp_watched = init_drop_watched;
+                                        init_camp_total = init_drop_required;
+                                        if init_drop_required > 0 {
+                                            init_pct = (init_drop_watched as f32 / init_drop_required as f32) * 100.0;
+                                        }
+                                        init_drop_name = format!("{} Drop", session.game_name.as_deref().unwrap_or(&target_game));
+                                        init_camp_name = init_drop_name.clone();
+                                        info!(
+                                            "[{}] Initial Session Progress: {} | {}/{} mins ({:.1}%)",
+                                            acc_tag, init_drop_name, init_drop_watched, init_drop_required, init_pct
                                         );
                                     }
 
@@ -163,9 +187,9 @@ pub async fn run_account_worker(
                                             state: "FARMING".to_string(),
                                             current_game: target_game.clone(),
                                             current_channel: chosen_channel.clone(),
-                                            drop_name: init_title.clone(),
-                                            progress_minutes: init_mins,
-                                            required_minutes: init_req,
+                                            drop_name: init_drop_name.clone(),
+                                            progress_minutes: init_camp_watched,
+                                            required_minutes: init_camp_total,
                                             percent: init_pct,
                                             spade_count: 0,
                                             hls_segments_checked: 0,
@@ -188,21 +212,21 @@ pub async fn run_account_worker(
                                             game: target_game.clone(),
                                             container_id: cid,
                                             telemetry: TelemetryPayload {
-                                                campaign_name: init_title.clone(),
-                                                current_drop: init_title.clone(),
-                                                drop_name: init_title.clone(),
-                                                current_minutes: init_mins,
-                                                required_minutes: init_req,
-                                                drop_watched: init_mins,
-                                                drop_required: init_req,
-                                                campaign_watched: init_mins,
-                                                campaign_total: init_req,
+                                                campaign_name: init_camp_name,
+                                                current_drop: init_drop_name.clone(),
+                                                drop_name: init_drop_name,
+                                                current_minutes: init_drop_watched,
+                                                required_minutes: init_drop_required,
+                                                drop_watched: init_drop_watched,
+                                                drop_required: init_drop_required,
+                                                campaign_watched: init_camp_watched,
+                                                campaign_total: init_camp_total,
                                                 campaign_percentage: init_pct as i32,
-                                                drop_index: 1,
-                                                drop_total: 1,
+                                                drop_index: init_drop_idx,
+                                                drop_total: init_drop_tot,
                                                 active_streamer: Some(chosen_channel),
                                                 is_actively_watching: true,
-                                                is_completed: false,
+                                                is_completed: init_completed,
                                             },
                                         }).await;
                                     }
@@ -274,43 +298,78 @@ pub async fn run_account_worker(
             }
         }
 
-        // Check drop progress via GQL
+        // Check drop progress via GQL InventoryQuery (with fallback to current_session)
         let mut drop_title = "-".to_string();
-        let mut cur_mins = 0;
-        let mut req_mins = 0;
-        let mut pct = 0.0;
+        let mut camp_name = format!("{} Drop", target_game);
+        let mut cur_drop_watched = 0;
+        let mut cur_drop_required = 60;
+        let mut cur_camp_watched = 0;
+        let mut cur_camp_total = 60;
+        let mut cur_drop_idx = 1;
+        let mut cur_drop_tot = 1;
+        let mut camp_pct = 0.0;
+        let mut is_done = false;
 
-        match gql.fetch_current_session(&account.auth_token, &streamer.login).await {
-            Ok(Some(session)) => {
-                cur_mins = session.current_minutes_watched;
-                req_mins = session.required_minutes_watched;
+        if let Ok(Some(camp_info)) = gql.fetch_inventory_campaign_progress(&account.auth_token, &target_game).await {
+            camp_name = camp_info.campaign_name;
+            drop_title = camp_info.drop_name;
+            cur_drop_watched = camp_info.drop_watched;
+            cur_drop_required = camp_info.drop_required;
+            cur_camp_watched = camp_info.campaign_watched;
+            cur_camp_total = camp_info.campaign_total;
+            cur_drop_idx = camp_info.drop_index;
+            cur_drop_tot = camp_info.drop_total;
+            camp_pct = camp_info.campaign_percentage as f32;
+            is_done = camp_info.is_completed;
 
-                if req_mins > 0 {
-                    pct = (cur_mins as f32 / req_mins as f32) * 100.0;
-                }
+            info!(
+                "[{}] Progress: {} (Drop {}/{}) | {}/{} mins (Campaign: {}/{} mins, {:.1}%) | HLS segs: {} | Spades: {}",
+                acc_tag, drop_title, cur_drop_idx, cur_drop_tot, cur_drop_watched, cur_drop_required, cur_camp_watched, cur_camp_total, camp_pct, total_hls_segments, total_spades
+            );
 
-                drop_title = format!("{} Drop", session.game_name.as_deref().unwrap_or(&target_game));
-
+            // RULE: NEVER CLAIM DROPS!
+            if is_done {
                 info!(
-                    "[{}] Progress: {} | {}/{} mins ({:.1}%) | HLS segs: {} | Spades: {}",
-                    acc_tag, drop_title, cur_mins, req_mins, pct, total_hls_segments, total_spades
+                    "[{}] Campaign '{}' reached 100% ({}/{} mins)! Leaving UNCLAIMED for buyer.",
+                    acc_tag, camp_name, cur_camp_watched, cur_camp_total
                 );
+                current_streamer = None;
+            }
+        } else {
+            match gql.fetch_current_session(&account.auth_token, &streamer.login).await {
+                Ok(Some(session)) => {
+                    cur_drop_watched = session.current_minutes_watched;
+                    cur_drop_required = session.required_minutes_watched;
+                    cur_camp_watched = cur_drop_watched;
+                    cur_camp_total = cur_drop_required;
 
-                // RULE: NEVER CLAIM DROPS!
-                if cur_mins >= req_mins && req_mins > 0 {
+                    if cur_drop_required > 0 {
+                        camp_pct = (cur_drop_watched as f32 / cur_drop_required as f32) * 100.0;
+                    }
+
+                    drop_title = format!("{} Drop", session.game_name.as_deref().unwrap_or(&target_game));
+                    camp_name = drop_title.clone();
+                    is_done = cur_drop_watched >= cur_drop_required && cur_drop_required > 0;
+
                     info!(
-                        "[{}] Drop '{}' reached 100% ({} mins)! Leaving UNCLAIMED for buyer.",
-                        acc_tag, drop_title, cur_mins
+                        "[{}] Progress: {} | {}/{} mins ({:.1}%) | HLS segs: {} | Spades: {}",
+                        acc_tag, drop_title, cur_drop_watched, cur_drop_required, camp_pct, total_hls_segments, total_spades
                     );
-                    // Rotate to next campaign or pause
-                    current_streamer = None;
+
+                    if is_done {
+                        info!(
+                            "[{}] Drop '{}' reached 100% ({} mins)! Leaving UNCLAIMED for buyer.",
+                            acc_tag, drop_title, cur_drop_watched
+                        );
+                        current_streamer = None;
+                    }
                 }
-            }
-            Ok(None) => {
-                debug!("[{}] No current drop session returned for {}", acc_tag, streamer.login);
-            }
-            Err(err) => {
-                debug!("[{}] Error fetching drop progress: {}", acc_tag, err);
+                Ok(None) => {
+                    debug!("[{}] No current drop session returned for {}", acc_tag, streamer.login);
+                }
+                Err(err) => {
+                    debug!("[{}] Error fetching drop progress: {}", acc_tag, err);
+                }
             }
         }
 
@@ -336,8 +395,6 @@ pub async fn run_account_worker(
             }
         }
 
-        let is_done = cur_mins >= req_mins && req_mins > 0;
-
         // Send status snapshot for UI
         if let Some(tx) = &status_tx {
             let _ = tx.send(AccountRuntimeStatus {
@@ -346,9 +403,9 @@ pub async fn run_account_worker(
                 current_game: target_game.clone(),
                 current_channel: streamer.login.clone(),
                 drop_name: drop_title.clone(),
-                progress_minutes: cur_mins,
-                required_minutes: req_mins,
-                percent: pct,
+                progress_minutes: cur_camp_watched,
+                required_minutes: cur_camp_total,
+                percent: camp_pct,
                 spade_count: total_spades,
                 hls_segments_checked: total_hls_segments,
             }).await;
@@ -364,18 +421,18 @@ pub async fn run_account_worker(
                 game: target_game.clone(),
                 container_id: cid.clone(),
                 telemetry: TelemetryPayload {
-                    campaign_name: drop_title.clone(),
+                    campaign_name: camp_name,
                     current_drop: drop_title.clone(),
                     drop_name: drop_title,
-                    current_minutes: cur_mins,
-                    required_minutes: req_mins,
-                    drop_watched: cur_mins,
-                    drop_required: req_mins,
-                    campaign_watched: cur_mins,
-                    campaign_total: req_mins,
-                    campaign_percentage: pct as i32,
-                    drop_index: 1,
-                    drop_total: 1,
+                    current_minutes: cur_drop_watched,
+                    required_minutes: cur_drop_required,
+                    drop_watched: cur_drop_watched,
+                    drop_required: cur_drop_required,
+                    campaign_watched: cur_camp_watched,
+                    campaign_total: cur_camp_total,
+                    campaign_percentage: camp_pct as i32,
+                    drop_index: cur_drop_idx,
+                    drop_total: cur_drop_tot,
                     active_streamer: Some(streamer.login.clone()),
                     is_actively_watching: true,
                     is_completed: is_done,

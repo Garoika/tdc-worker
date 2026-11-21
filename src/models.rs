@@ -57,6 +57,20 @@ pub struct DropCurrentSession {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CampaignProgressInfo {
+    pub campaign_name: String,
+    pub campaign_watched: i32,
+    pub campaign_total: i32,
+    pub campaign_percentage: i32,
+    pub drop_name: String,
+    pub drop_watched: i32,
+    pub drop_required: i32,
+    pub drop_index: i32,
+    pub drop_total: i32,
+    pub is_completed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamerChannel {
     pub id: String,
     pub login: String,
