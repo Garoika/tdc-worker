@@ -328,20 +328,54 @@ impl TwitchGqlClient {
         };
 
         let target_clean = target_game.trim().to_lowercase();
-        let mut matched_campaign = None;
+        let mut best_campaign = None;
+        let mut best_score = 0;
+
         for c in campaigns {
             let g_name = c.pointer("/game/name").and_then(|v| v.as_str()).unwrap_or_default().to_lowercase();
             let c_name = c.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_lowercase();
 
-            if (!g_name.is_empty() && (g_name.contains(&target_clean) || target_clean.contains(&g_name)))
-                || (!c_name.is_empty() && (c_name.contains(&target_clean) || target_clean.contains(&c_name)))
-            {
-                matched_campaign = Some(c);
-                break;
+            let matches = (!g_name.is_empty() && (g_name.contains(&target_clean) || target_clean.contains(&g_name)))
+                || (!c_name.is_empty() && (c_name.contains(&target_clean) || target_clean.contains(&c_name)));
+
+            if matches {
+                let status = c.get("status").and_then(|v| v.as_str()).unwrap_or_default();
+                let is_active = status.eq_ignore_ascii_case("ACTIVE");
+                let is_expired = status.eq_ignore_ascii_case("EXPIRED");
+
+                let has_uncompleted_drop = c.get("timeBasedDrops")
+                    .and_then(|v| v.as_array())
+                    .map(|drops| {
+                        drops.iter().any(|d| {
+                            let req = d.get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let cur = d.pointer("/self/currentMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let is_claimed = d.pointer("/self/isClaimed").and_then(|v| v.as_bool()).unwrap_or(false);
+                            !is_claimed && cur < req
+                        })
+                    })
+                    .unwrap_or(false);
+
+                let score = if is_active && has_uncompleted_drop {
+                    4
+                } else if is_active {
+                    3
+                } else if !is_expired {
+                    2
+                } else {
+                    1
+                };
+
+                if score > best_score {
+                    best_score = score;
+                    best_campaign = Some(c);
+                    if score == 4 {
+                        break;
+                    }
+                }
             }
         }
 
-        let c = match matched_campaign {
+        let c = match best_campaign {
             Some(camp) => camp,
             None => return Ok(None),
         };

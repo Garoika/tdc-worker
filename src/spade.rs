@@ -53,7 +53,9 @@ impl SpadeClient {
             "query": "mutation SendEvents($input: SendSpadeEventsInput!) { sendSpadeEvents(input: $input) { statusCode } }",
             "variables": {
                 "input": {
-                    "data": b64_payload
+                    "data": b64_payload,
+                    "repository": "twilight",
+                    "encoding": "GZIP_B64"
                 }
             }
         });
