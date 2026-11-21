@@ -5,19 +5,9 @@ cd /d "%~dp0"
 echo Twitch Drops Cluster - Worker Node
 
 :worker_loop
-rem 1. Apply any pending self-update to start_worker.bat
-if exist "start_worker.new.bat" (
-    move /y "start_worker.new.bat" "start_worker.bat" >nul
-    "%~dp0start_worker.bat"
-    exit /b
-)
-
-rem 2. Apply any pending executable updates
-if exist "tdc-worker.new.exe" (
-    move /y "tdc-worker.new.exe" "tdc-worker.exe" >nul
-)
-if exist "tdc-dashboard.new.exe" (
-    move /y "tdc-dashboard.new.exe" "tdc-dashboard.exe" >nul
+rem 1. Auto-update repository via git pull
+if exist ".git" (
+    git pull origin RUSTerization --quiet 2>nul
 )
 
 if not exist "tdc-worker.exe" (
@@ -26,7 +16,7 @@ if not exist "tdc-worker.exe" (
     goto worker_loop
 )
 
-rem 3. Launch GUI dashboard companion if present
+rem 2. Launch GUI dashboard companion if present
 if exist "tdc-dashboard.exe" (
     if not defined NO_GUI (
         start "" "tdc-dashboard.exe"
