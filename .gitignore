@@ -22,6 +22,9 @@ farmer_bin/logs/
 farmer_bin/config*.json
 farmer_bin/Configuration/
 farmer_bin/appsettings.Development.json
+farmer_bin/tdc-farm-rust*
+tdc-worker.exe
+tdc-worker
 
 worker/.worker_state.json
 worker/.monitor.pid
