@@ -7,6 +7,7 @@ mod ws_worker;
 pub mod logger;
 pub mod state_writer;
 pub mod monitor;
+pub mod autoupdate;
 
 use std::collections::HashMap;
 use std::fs;
@@ -70,6 +71,19 @@ fn get_process_memory_mb() -> f64 {
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("TDC Rust Worker");
+        println!("Usage: tdc-worker [OPTIONS]");
+        println!();
+        println!("Options:");
+        println!("  --worker       Run as native WebSocket worker managed by tdc-server");
+        println!("  --standalone   Run in standalone mode reading accounts.txt");
+        println!("  --ipc          Run in IPC mode for external orchestrators");
+        println!("  --monitor      Run companion live terminal dashboard monitor");
+        println!("  --help, -h     Print this help message");
+        return Ok(());
+    }
+
     // 0. If explicit monitor mode requested -> run live companion dashboard monitor!
     if args.iter().any(|a| a == "--monitor") {
         let parent_pid = args
@@ -101,9 +115,11 @@ async fn main() -> anyhow::Result<()> {
             .with_env_filter(filter)
             .with_target(false)
             .init();
+        tokio::spawn(autoupdate::start_autoupdate_loop(Duration::from_secs(60)));
         return ws_worker::run_ws_worker().await;
     }
 
+    tokio::spawn(autoupdate::start_autoupdate_loop(Duration::from_secs(60)));
     // Default: Standalone mode (accounts.txt)
     run_standalone_engine().await
 }

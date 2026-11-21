@@ -12,6 +12,9 @@ fi
 chmod +x tdc-worker
 
 while true; do
+    if [ -d ".git" ]; then
+        git pull origin RUSTerization --quiet 2>/dev/null || true
+    fi
     ./tdc-worker || true
     echo "Restarting Worker Node in 3s..."
     sleep 3
