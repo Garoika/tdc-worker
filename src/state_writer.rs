@@ -121,9 +121,9 @@ pub fn update_node_registration(name: &str, limit: usize) {
     }
 }
 
-pub fn register_job(login: &str, game: &str) {
+pub fn register_job(job_id: &str, login: &str, game: &str) {
     if let Ok(mut t) = get_tracker().lock() {
-        t.accounts.entry(login.to_string()).or_insert_with(|| AccountTelemetryState {
+        t.accounts.entry(job_id.to_string()).or_insert_with(|| AccountTelemetryState {
             login: login.to_string(),
             game: game.to_string(),
             streamer: String::new(),
@@ -137,13 +137,14 @@ pub fn register_job(login: &str, game: &str) {
     }
 }
 
-pub fn remove_job(login: &str) {
+pub fn remove_job(job_id: &str) {
     if let Ok(mut t) = get_tracker().lock() {
-        t.accounts.remove(login);
+        t.accounts.remove(job_id);
     }
 }
 
 pub fn record_telemetry(
+    job_id: &str,
     login: &str,
     game: &str,
     camp_watched: i32,
@@ -156,7 +157,7 @@ pub fn record_telemetry(
     drop_name: Option<&str>,
 ) {
     if let Ok(mut t) = get_tracker().lock() {
-        let entry = t.accounts.entry(login.to_string()).or_insert_with(|| AccountTelemetryState {
+        let entry = t.accounts.entry(job_id.to_string()).or_insert_with(|| AccountTelemetryState {
             login: login.to_string(),
             game: game.to_string(),
             streamer: String::new(),
@@ -168,6 +169,7 @@ pub fn record_telemetry(
             is_actively_watching: false,
         });
 
+        entry.login = login.to_string();
         entry.game = game.to_string();
         entry.watched_mins = camp_watched;
         if camp_total > 0 {

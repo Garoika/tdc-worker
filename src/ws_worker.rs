@@ -227,8 +227,9 @@ async fn connect_and_serve(
 
             // Outgoing telemetry & status events from active accounts
             Some(evt) = event_rx.recv() => {
-                if let IpcEvent::TelemetryUpdate { account_login, game, telemetry, .. } = &evt {
+                if let IpcEvent::TelemetryUpdate { job_id, account_login, game, telemetry, .. } = &evt {
                     crate::state_writer::record_telemetry(
+                        job_id,
                         account_login,
                         game,
                         telemetry.campaign_watched,
@@ -322,6 +323,7 @@ async fn connect_and_serve(
                         info!("[NativeWorker] Spawning account '{}' for job {} (Game: '{}')", login, &job_id[..8.min(job_id.len())], target.game);
 
                         if let Some(old) = active_jobs.remove(&job_id) {
+                            crate::state_writer::remove_job(&job_id);
                             old.cancel_token.cancel();
                         }
 
@@ -372,7 +374,7 @@ async fn connect_and_serve(
                             ).await;
                         });
 
-                        crate::state_writer::register_job(&login, &target.game);
+                        crate::state_writer::register_job(&job_id, &login, &target.game);
 
                         active_jobs.insert(job_id.clone(), ActiveJob {
                             account_id: account.id,
@@ -426,7 +428,7 @@ async fn connect_and_serve(
 
                         if let Some(jid) = target_jid {
                             if let Some(job) = active_jobs.remove(&jid) {
-                                crate::state_writer::remove_job(&job.login);
+                                crate::state_writer::remove_job(&jid);
                                 job.cancel_token.cancel();
                                 info!("[NativeWorker] Stopped account '{}' (job {})", job.login, &jid[..8.min(jid.len())]);
                                 let cid = format!("proc_{}", &jid[..8.min(jid.len())]);
@@ -444,7 +446,7 @@ async fn connect_and_serve(
                     ServerMessage::StopAllContainers => {
                         info!("[NativeWorker] Stopping all {} active container(s)...", active_jobs.len());
                         for (jid, job) in active_jobs.drain() {
-                            crate::state_writer::remove_job(&job.login);
+                            crate::state_writer::remove_job(&jid);
                             job.cancel_token.cancel();
                             let cid = format!("proc_{}", &jid[..8.min(jid.len())]);
                             let stopped_evt = json!({
