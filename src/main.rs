@@ -4,6 +4,7 @@ mod hls_watcher;
 mod spade;
 mod farm_worker;
 mod ws_worker;
+pub mod logger;
 
 use std::collections::HashMap;
 use std::fs;
@@ -84,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         fmt()
+            .with_writer(crate::logger::DualWriter)
             .with_env_filter(filter)
             .with_target(false)
             .init();

@@ -417,6 +417,23 @@ async fn connect_and_serve(
                         max_containers = limit;
                         info!("[NativeWorker] Max capacity updated to {}", limit);
                     }
+                    ServerMessage::GetContainerLogs { request_id, job_id: _, container_id: _, login } => {
+                        let logs = match login {
+                            Some(ref l) if !l.trim().is_empty() => {
+                                crate::logger::get_logs_for_account(l.trim(), 200)
+                            }
+                            _ => {
+                                crate::logger::get_all_logs(500)
+                            }
+                        };
+
+                        let resp = json!({
+                            "type": "CONTAINER_LOGS_RESPONSE",
+                            "request_id": request_id,
+                            "logs": logs
+                        });
+                        let _ = ws_tx.send(Message::Text(resp.to_string().into())).await;
+                    }
                     ServerMessage::Unknown => {}
                 }
             }

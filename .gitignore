@@ -31,3 +31,4 @@ worker/.monitor.pid
 tdc-worker.exe
 farmer_bin/tdc-farm-rust*
 /target
+*.old.exe

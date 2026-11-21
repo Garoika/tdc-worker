@@ -213,6 +213,18 @@ pub enum ServerMessage {
     UpdateMaxContainers {
         max_containers: usize,
     },
+    #[serde(rename = "GET_CONTAINER_LOGS")]
+    GetContainerLogs {
+        request_id: String,
+        #[allow(dead_code)]
+        #[serde(default)]
+        job_id: Option<String>,
+        #[allow(dead_code)]
+        #[serde(default)]
+        container_id: Option<String>,
+        #[serde(default)]
+        login: Option<String>,
+    },
     #[serde(other)]
     Unknown,
 }
