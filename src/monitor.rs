@@ -61,7 +61,7 @@ fn is_process_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn get_terminal_width() -> usize {
+fn get_terminal_size() -> (usize, usize) {
     extern "system" {
         fn GetStdHandle(nStdHandle: i32) -> *mut std::ffi::c_void;
         fn GetConsoleScreenBufferInfo(h: *mut std::ffi::c_void, info: *mut CONSOLE_SCREEN_BUFFER_INFO) -> i32;
@@ -86,15 +86,27 @@ fn get_terminal_width() -> usize {
         let mut info = std::mem::zeroed::<CONSOLE_SCREEN_BUFFER_INFO>();
         if GetConsoleScreenBufferInfo(handle, &mut info) != 0 {
             let w = (info.srWindow.right - info.srWindow.left + 1) as usize;
-            return w.max(40);
+            let h = (info.srWindow.bottom - info.srWindow.top + 1) as usize;
+            return (w.max(60), h.max(15));
         }
     }
-    80
+    (80, 25)
 }
 
 #[cfg(not(windows))]
-fn get_terminal_width() -> usize {
-    80
+fn get_terminal_size() -> (usize, usize) {
+    (80, 25)
+}
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.chars().count() <= max_len {
+        s.to_string()
+    } else if max_len > 3 {
+        let tr: String = s.chars().take(max_len - 3).collect();
+        format!("{}...", tr)
+    } else {
+        s.chars().take(max_len).collect()
+    }
 }
 
 fn format_uptime(secs: u64) -> String {
@@ -131,8 +143,10 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
             }
         }
 
-        let term_width = get_terminal_width().max(60);
-        let inner_w = term_width.saturating_sub(6);
+        let (cols, rows) = get_terminal_size();
+        let term_width = cols.min(160);
+        let table_target_w = term_width.saturating_sub(4);
+        let inner_w = table_target_w.saturating_sub(4);
 
         // Read .worker_state.json
         let state_opt = if let Ok(content) = fs::read_to_string(".worker_state.json") {
@@ -141,16 +155,13 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
             None
         };
 
-        // Move to top-left and clear
-        print!("\x1b[H\x1b[J");
-
         let mut lines = Vec::new();
 
-        lines.push(format!("{CYAN}╔{}╗{RESET}", "═".repeat(inner_w + 4)));
+        lines.push(format!("{CYAN}╔{}╗{RESET}", "═".repeat(inner_w + 2)));
         let title_text = "  TWITCH DROPS CLUSTER — NATIVE WORKER MONITOR  ";
-        let title_pad = inner_w.saturating_sub(title_text.len());
-        lines.push(format!("{CYAN}║{RESET}{BOLD}{WHITE}{}{}{RESET}{CYAN}║{RESET}", title_text, " ".repeat(title_pad + 4)));
-        lines.push(format!("{CYAN}╚{}╝{RESET}", "═".repeat(inner_w + 4)));
+        let title_pad = (inner_w + 2).saturating_sub(title_text.len());
+        lines.push(format!("{CYAN}║{RESET}{BOLD}{WHITE}{}{}{RESET}{CYAN}║{RESET}", title_text, " ".repeat(title_pad)));
+        lines.push(format!("{CYAN}╚{}╝{RESET}", "═".repeat(inner_w + 2)));
 
         if let Some(st) = state_opt {
             let conn_badge = if st.master_connected {
@@ -173,7 +184,7 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
                 " {BOLD}System RAM:{RESET} {WHITE}{:.1} MB{RESET} / {:.1} MB   {BOLD}Limit:{RESET} {WHITE}{} acc{RESET}",
                 st.ram_used_mb, st.ram_total_mb, st.max_containers
             ));
-            lines.push(format!("{CYAN}{}{RESET}", "─".repeat(inner_w + 4)));
+            lines.push(format!("{CYAN}{}{RESET}", "─".repeat(inner_w + 2)));
 
             let mut total_farming = 0;
             let mut total_waiting = 0;
@@ -186,15 +197,16 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
                 " {CYAN}●{RESET} {BOLD}ACTIVE ACCOUNTS:{RESET} {GREEN}{BOLD}{} Farming{RESET}  |  {YELLOW}{BOLD}{} Waiting{RESET}  {DIM}(Total: {}){RESET}",
                 total_farming, total_waiting, st.total_accounts
             ));
-            lines.push(format!("{CYAN}{}{RESET}", "─".repeat(inner_w + 4)));
+            lines.push(format!("{CYAN}{}{RESET}", "─".repeat(inner_w + 2)));
             lines.push(format!(" {CYAN}●{RESET} {BOLD}GAMES BREAKDOWN:{RESET}"));
 
             if !st.games.is_empty() {
-                let w_acc = 10;
-                let rem_w = inner_w.saturating_sub(w_acc + 6);
-                let w_game = (rem_w * 35 / 100).max(14);
-                let w_streamer = (rem_w * 32 / 100).max(12);
-                let w_prog = rem_w.saturating_sub(w_game + w_streamer).max(14);
+                let avail_table_w = (inner_w + 2).saturating_sub(13);
+                let w_acc = 9;
+                let rem_w = avail_table_w.saturating_sub(w_acc);
+                let w_game = (rem_w * 36 / 100).max(12);
+                let w_streamer = (rem_w * 30 / 100).max(10);
+                let w_prog = rem_w.saturating_sub(w_game + w_streamer);
 
                 lines.push(format!(
                     "{CYAN}┌─{0}─┬─{1}─┬─{2}─┬─{3}─┐{RESET}",
@@ -210,10 +222,10 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
                 ));
 
                 for (g_name, g_info) in &st.games {
-                    let disp_game = if g_name.len() > w_game { &g_name[..w_game] } else { g_name.as_str() };
+                    let disp_game = truncate_str(g_name, w_game);
                     let acc_str = format!("{} acc", g_info.count);
                     let st_name = g_info.streamers.first().map(|s| s.as_str()).unwrap_or(if g_info.is_active { "Active" } else { "Seeking..." });
-                    let disp_st = if st_name.len() > w_streamer { &st_name[..w_streamer] } else { st_name };
+                    let disp_st = truncate_str(st_name, w_streamer);
 
                     let prog_str = if g_info.left_minutes <= 0 {
                         "Done (100%)".to_string()
@@ -222,7 +234,7 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
                     } else {
                         format!("{}/{}m ({} left)", g_info.min_watched, g_info.required_minutes, g_info.time_left)
                     };
-                    let disp_prog = if prog_str.len() > w_prog { &prog_str[..w_prog] } else { prog_str.as_str() };
+                    let disp_prog = truncate_str(&prog_str, w_prog);
 
                     lines.push(format!(
                         "{CYAN}│{RESET} {:<w_game$} {CYAN}│{RESET} {:>w_acc$} {CYAN}│{RESET} {:<w_streamer$} {CYAN}│{RESET} {:<w_prog$} {CYAN}│{RESET}",
@@ -241,28 +253,35 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
             lines.push(String::new());
             lines.push(format!(" {CYAN}●{RESET} {BOLD}RECENT ACTIVITY:{RESET}"));
 
+            // Dynamic event limit based on terminal window height so screen NEVER scrolls
+            let fixed_lines_count = lines.len() + 3; // separator + footer
+            let max_events = rows.saturating_sub(fixed_lines_count).max(1).min(15);
+
             if !st.recent_events.is_empty() {
-                for evt in st.recent_events.iter().take(12) {
-                    let max_e = inner_w.saturating_sub(4);
-                    let disp_e = if evt.len() > max_e { &evt[..max_e] } else { evt.as_str() };
+                let max_e = (inner_w + 2).saturating_sub(6);
+                for evt in st.recent_events.iter().take(max_events) {
+                    let disp_e = truncate_str(evt, max_e);
                     lines.push(format!("  {CYAN}▸{RESET} {DIM}{disp_e}{RESET}"));
                 }
             } else {
                 lines.push(format!("  {DIM}Waiting for telemetry events from active workers...{RESET}"));
             }
 
-            lines.push(format!("{CYAN}{}{RESET}", "─".repeat(inner_w + 4)));
-            lines.push(format!(" {DIM}Live (1s) • Pure Rust Native Monitor • Closes with worker process{RESET}"));
+            lines.push(format!("{CYAN}{}{RESET}", "─".repeat(inner_w + 2)));
+            let footer = format!("Live (1s) • Auto-scaled ({}x{}) • Closes with worker process", cols, rows);
+            let disp_footer = truncate_str(&footer, inner_w + 2);
+            lines.push(format!(" {DIM}{disp_footer}{RESET}"));
         } else {
             lines.push(format!(" {YELLOW}Waiting for worker process to initialize and write state...{RESET}"));
             lines.push(format!(" {DIM}If worker is running, telemetry will appear here momentarily.{RESET}"));
         }
 
-        for line in lines {
-            println!("{}", line);
-        }
-
+        // Clear screen and scrollback, move cursor to 0,0
+        print!("\x1b[2J\x1b[3J\x1b[H");
+        let output = lines.join("\r\n");
+        print!("{}\r\n", output);
         let _ = io::stdout().flush();
+
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
