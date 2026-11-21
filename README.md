@@ -19,6 +19,6 @@ bash start_worker.sh
 ```
 
 ## Features
-- 🔄 **Auto-Updater**: Automatically pulls code updates from GitHub and reloads.
-- ⚡ **Auto Docker Builder & Puller**: Automatically pulls pre-built Docker images or builds locally.
-- 📊 **Real-time Telemetry & Logs**: Streams live CPU/RAM metrics and Docker container logs to Master Dashboard.
+- ⚡ **Native Rust Engine**: Zero-dependency standalone binary, 10-20 MB RAM usage on 100+ accounts.
+- 📊 **Real-time Telemetry & Logs**: Streams live CPU/RAM metrics and account progress to Master Dashboard.
+- 🖥️ **Built-in ANSI Monitor**: Live companion TUI dashboard for terminal visibility.

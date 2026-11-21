@@ -74,7 +74,6 @@ fn get_system_ram_mb() -> (f64, f64) {
 struct ActiveJob {
     account_id: String,
     login: String,
-    game: String,
     cancel_token: CancellationToken,
 }
 
@@ -379,7 +378,6 @@ async fn connect_and_serve(
                         active_jobs.insert(job_id.clone(), ActiveJob {
                             account_id: account.id,
                             login,
-                            game: target.game,
                             cancel_token: child_token,
                         });
 

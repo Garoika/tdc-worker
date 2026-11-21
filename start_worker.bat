@@ -9,13 +9,9 @@ if exist ".git" (
 )
 
 if not exist "tdc-worker.exe" (
-    if exist "farmer_bin\tdc-farm-rust.exe" (
-        copy /y "farmer_bin\tdc-farm-rust.exe" "tdc-worker.exe" >nul
-    ) else (
-        echo [ERROR] tdc-worker.exe not found!
-        pause
-        exit /b 1
-    )
+    echo [ERROR] tdc-worker.exe not found!
+    pause
+    exit /b 1
 )
 
 :worker_loop

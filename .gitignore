@@ -5,30 +5,13 @@ desktop.ini
 .idea/
 .vscode/
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-env/
-
-# Configs & Tokens
+# Configs & State
 .worker_config.json
+.worker_state.json
 *.env
 
-# Farmer Bin Temp & Logs
-farmer_bin/logs/
-farmer_bin/config*.json
-farmer_bin/Configuration/
-farmer_bin/appsettings.Development.json
-farmer_bin/tdc-farm-rust*
+# Rust Build Output & Binaries
+/target
 tdc-worker.exe
 tdc-worker
-
-worker/.worker_state.json
-worker/.monitor.pid
-tdc-worker.exe
-farmer_bin/tdc-farm-rust*
-/target
 *.old.exe

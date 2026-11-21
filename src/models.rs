@@ -237,8 +237,6 @@ pub struct SpawnAccountData {
     pub login: String,
     pub auth_token: String,
     #[serde(default)]
-    pub client_secret: Option<String>,
-    #[serde(default)]
     pub twitch_user_id: Option<String>,
 }
 
