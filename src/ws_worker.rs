@@ -123,7 +123,58 @@ pub fn try_launch_monitor_window() {
 }
 
 #[cfg(not(windows))]
-pub fn try_launch_monitor_window() {}
+pub fn try_launch_monitor_window() {
+    if std::env::var("NO_MONITOR").is_ok() {
+        return;
+    }
+
+    let has_display = std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+    if !has_display {
+        return;
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        let my_pid = std::process::id();
+        let exe_str = exe.to_string_lossy().to_string();
+        let pid_str = my_pid.to_string();
+
+        let candidates: &[(&str, &[&str])] = &[
+            ("foot", &["--title", "TDC Live Monitor", &exe_str, "--monitor", "--parent-pid", &pid_str]),
+            ("kitty", &["--title", "TDC Live Monitor", &exe_str, "--monitor", "--parent-pid", &pid_str]),
+            ("alacritty", &["-T", "TDC Live Monitor", "-e", &exe_str, "--monitor", "--parent-pid", &pid_str]),
+            ("ghostty", &["-e", &exe_str, "--monitor", "--parent-pid", &pid_str]),
+            ("gnome-terminal", &["--title=TDC Live Monitor", "--", &exe_str, "--monitor", "--parent-pid", &pid_str]),
+            ("konsole", &["-e", &exe_str, "--monitor", "--parent-pid", &pid_str]),
+            ("xfce4-terminal", &["-T", "TDC Live Monitor", "-e", &exe_str, "--monitor", "--parent-pid", &pid_str]),
+            ("xterm", &["-title", "TDC Live Monitor", "-e", &exe_str, "--monitor", "--parent-pid", &pid_str]),
+        ];
+
+        for (term, args) in candidates {
+            if is_cmd_available(term) {
+                if let Ok(child) = std::process::Command::new(term)
+                    .args(*args)
+                    .spawn()
+                {
+                    tracing::info!("🖥️  Launched companion TUI Live Monitor in separate window ({}, PID: {})", term, child.id());
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn is_cmd_available(cmd: &str) -> bool {
+    if let Ok(path) = std::env::var("PATH") {
+        for p in std::env::split_paths(&path) {
+            let full = p.join(cmd);
+            if full.is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 pub async fn run_ws_worker() -> Result<()> {
     let cfg = load_worker_config();

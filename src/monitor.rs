@@ -104,6 +104,19 @@ fn get_terminal_size() -> (usize, usize) {
 
 #[cfg(not(windows))]
 fn get_terminal_size() -> (usize, usize) {
+    unsafe {
+        let mut winsize = libc::winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut winsize) == 0 && winsize.ws_col > 0 {
+            let w = winsize.ws_col as usize;
+            let h = winsize.ws_row as usize;
+            return (w.clamp(55, 240), h.max(18));
+        }
+    }
     (100, 30)
 }
 

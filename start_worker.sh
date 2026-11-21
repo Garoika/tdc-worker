@@ -4,6 +4,10 @@ set -e
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
+if [ "$1" == "--monitor" ] || [ "$1" == "-m" ] || [ "$1" == "--tui" ]; then
+    exec "$SCRIPT_DIR/tdc-worker" --monitor "$@"
+fi
+
 while true; do
     if [ -d ".git" ]; then
         git pull origin RUSTerization --quiet 2>/dev/null || true
@@ -11,7 +15,7 @@ while true; do
 
     if [ -f "tdc-worker" ]; then
         chmod +x tdc-worker
-        ./tdc-worker || true
+        ./tdc-worker "$@" || true
     else
         echo "[ERROR] tdc-worker binary not found!"
         sleep 5
