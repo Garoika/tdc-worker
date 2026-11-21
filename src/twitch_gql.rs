@@ -322,9 +322,13 @@ impl TwitchGqlClient {
             .context("Error requesting InventoryQuery")?;
 
         let json_val: Value = resp.json().await.context("Invalid InventoryQuery response")?;
+        Ok(Self::parse_inventory_campaign_info(&json_val, target_game))
+    }
+
+    pub fn parse_inventory_campaign_info(json_val: &Value, target_game: &str) -> Option<CampaignProgressInfo> {
         let campaigns = match json_val.pointer("/data/currentUser/inventory/dropCampaignsInProgress") {
             Some(Value::Array(arr)) => arr,
-            _ => return Ok(None),
+            _ => return None,
         };
 
         let target_clean = target_game.trim().to_lowercase();
@@ -377,13 +381,13 @@ impl TwitchGqlClient {
 
         let c = match best_campaign {
             Some(camp) => camp,
-            None => return Ok(None),
+            None => return None,
         };
 
         let campaign_name = c.get("name").and_then(|v| v.as_str()).unwrap_or("Drops Campaign").to_string();
         let drops = match c.get("timeBasedDrops").and_then(|v| v.as_array()) {
             Some(d) if !d.is_empty() => d,
-            _ => return Ok(None),
+            _ => return None,
         };
 
         let is_cumulative = drops.len() > 1 && {
@@ -446,7 +450,7 @@ impl TwitchGqlClient {
                 }
             }
 
-            Ok(Some(CampaignProgressInfo {
+            Some(CampaignProgressInfo {
                 campaign_name,
                 campaign_watched,
                 campaign_total,
@@ -457,7 +461,7 @@ impl TwitchGqlClient {
                 drop_index,
                 drop_total: drops.len() as i32,
                 is_completed: all_done || campaign_watched >= campaign_total,
-            }))
+            })
         } else {
             let mut campaign_total = 0;
             let mut campaign_watched = 0;
@@ -492,7 +496,7 @@ impl TwitchGqlClient {
             campaign_total = campaign_total.max(1);
             let campaign_percentage = ((campaign_watched as f64 / campaign_total as f64) * 100.0).round() as i32;
 
-            Ok(Some(CampaignProgressInfo {
+            Some(CampaignProgressInfo {
                 campaign_name,
                 campaign_watched,
                 campaign_total,
@@ -503,7 +507,7 @@ impl TwitchGqlClient {
                 drop_index: active_idx,
                 drop_total: drops.len() as i32,
                 is_completed: all_done || campaign_watched >= campaign_total,
-            }))
+            })
         }
     }
 
@@ -648,5 +652,114 @@ impl TwitchGqlClient {
         }
 
         Ok(streamers)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn make_campaign(name: &str, status: &str, drops: Vec<(i64, i64, bool)>) -> Value {
+        let time_based_drops: Vec<Value> = drops.into_iter().enumerate().map(|(i, (req, cur, claimed))| {
+            json!({
+                "id": format!("drop_{}", i),
+                "name": format!("Item {}", i + 1),
+                "requiredMinutesWatched": req,
+                "benefitEdges": [{
+                    "benefit": {
+                        "id": format!("b_{}", i),
+                        "name": format!("Item {}", i + 1)
+                    }
+                }],
+                "self": {
+                    "currentMinutesWatched": cur,
+                    "isClaimed": claimed
+                }
+            })
+        }).collect();
+
+        json!({
+            "id": format!("camp_{}", name),
+            "name": name,
+            "status": status,
+            "game": {
+                "id": "12345",
+                "name": "Escape from Tarkov"
+            },
+            "timeBasedDrops": time_based_drops
+        })
+    }
+
+    #[test]
+    fn test_three_campaigns_progression() {
+        // Campaign 1: Finished (60/60 min, completed)
+        let camp1_done = make_campaign("Campaign 1", "ACTIVE", vec![(60, 60, false)]);
+        // Campaign 2: In progress (30/60 min)
+        let camp2_prog = make_campaign("Campaign 2", "ACTIVE", vec![(60, 30, false)]);
+        // Campaign 3: Not started (0/60 min)
+        let camp3_wait = make_campaign("Campaign 3", "ACTIVE", vec![(60, 0, false)]);
+
+        let payload_stage1 = json!({
+            "data": {
+                "currentUser": {
+                    "inventory": {
+                        "dropCampaignsInProgress": [
+                            camp1_done.clone(),
+                            camp2_prog.clone(),
+                            camp3_wait.clone()
+                        ]
+                    }
+                }
+            }
+        });
+
+        // Stage 1: Campaign 1 is finished, Campaign 2 is active
+        let res1 = TwitchGqlClient::parse_inventory_campaign_info(&payload_stage1, "Escape from Tarkov").unwrap();
+        assert_eq!(res1.campaign_name, "Campaign 2");
+        assert_eq!(res1.campaign_watched, 30);
+        assert_eq!(res1.campaign_total, 60);
+        assert_eq!(res1.is_completed, false);
+
+        // Stage 2: Campaign 1 is finished, Campaign 2 is now ALSO finished (60/60), Campaign 3 is in progress
+        let camp2_done = make_campaign("Campaign 2", "ACTIVE", vec![(60, 60, false)]);
+        let payload_stage2 = json!({
+            "data": {
+                "currentUser": {
+                    "inventory": {
+                        "dropCampaignsInProgress": [
+                            camp1_done.clone(),
+                            camp2_done.clone(),
+                            camp3_wait.clone()
+                        ]
+                    }
+                }
+            }
+        });
+
+        let res2 = TwitchGqlClient::parse_inventory_campaign_info(&payload_stage2, "Escape from Tarkov").unwrap();
+        assert_eq!(res2.campaign_name, "Campaign 3");
+        assert_eq!(res2.campaign_watched, 0);
+        assert_eq!(res2.campaign_total, 60);
+        assert_eq!(res2.is_completed, false);
+
+        // Stage 3: ALL 3 campaigns are finished (60/60)
+        let camp3_done = make_campaign("Campaign 3", "ACTIVE", vec![(60, 60, false)]);
+        let payload_stage3 = json!({
+            "data": {
+                "currentUser": {
+                    "inventory": {
+                        "dropCampaignsInProgress": [
+                            camp1_done,
+                            camp2_done,
+                            camp3_done
+                        ]
+                    }
+                }
+            }
+        });
+
+        let res3 = TwitchGqlClient::parse_inventory_campaign_info(&payload_stage3, "Escape from Tarkov").unwrap();
+        assert_eq!(res3.is_completed, true);
     }
 }
