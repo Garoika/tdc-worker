@@ -110,6 +110,8 @@ pub fn update_connection_info(url: &str, connected: bool) {
         t.master_url = url.to_string();
         t.master_connected = connected;
     }
+    // Immediately flush to disk so companion monitor/dashboard catches disconnect in real-time
+    save_state_to_disk(0.0, 0.0);
 }
 
 pub fn update_node_registration(name: &str, limit: usize) {

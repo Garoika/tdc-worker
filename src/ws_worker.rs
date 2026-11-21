@@ -107,7 +107,7 @@ pub fn load_worker_config() -> WorkerConfigFile {
 
 #[cfg(windows)]
 pub fn try_launch_monitor_window() {
-    if std::env::var("NO_MONITOR").is_ok() {
+    if std::env::var("NO_MONITOR").is_ok() || Path::new("tdc-dashboard.exe").exists() {
         return;
     }
     if let Ok(exe) = std::env::current_exe() {
@@ -152,6 +152,8 @@ pub async fn run_ws_worker() -> Result<()> {
                 warn!("Connection error: {}. Retrying in {}s...", err, retry_delay);
             }
         }
+
+        crate::state_writer::update_connection_info(&cfg.master_url, false);
 
         tokio::time::sleep(Duration::from_secs(retry_delay)).await;
         retry_delay = (retry_delay * 2).min(30);

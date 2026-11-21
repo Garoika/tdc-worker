@@ -282,10 +282,12 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
         lines.push(format!("{CYAN}╚{}╝{RESET}", "═".repeat(inner_w + 2)));
 
         if let Some(st) = state_opt {
-            let status_badge = if st.master_connected {
+            let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            let is_fresh = now_secs.saturating_sub(st.updated_at) <= 8;
+            let status_badge = if st.master_connected && is_fresh {
                 format!("{GREEN}[ONLINE ●]{RESET}")
             } else {
-                format!("{RED}[CONNECTING ●]{RESET}")
+                format!("{RED}[OFFLINE ○]{RESET}")
             };
 
             let uptime_str = format_uptime(st.uptime_seconds);

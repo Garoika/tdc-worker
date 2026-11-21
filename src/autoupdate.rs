@@ -1,105 +1,71 @@
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
-use tracing::{debug, info};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use tracing::{debug, info, warn};
+
+#[derive(Debug, Deserialize)]
+struct UpdateManifest {
+    #[allow(dead_code)]
+    platform: String,
+    files: Vec<UpdateFileEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateFileEntry {
+    name: String,
+    sha256: String,
+    #[allow(dead_code)]
+    size: u64,
+}
 
 pub async fn start_autoupdate_loop(check_interval: Duration) {
     info!(
-        "🔄 Auto-updater service active (checking GitHub every {}s)",
+        "🔄 Server auto-updater active (checking TDC Master every {}s)",
         check_interval.as_secs()
     );
 
-    // Initial check after 10 seconds
-    tokio::time::sleep(Duration::from_secs(10)).await;
+    // Initial check after 5 seconds
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     loop {
-        if let Err(e) = check_and_update().await {
-            debug!("[AutoUpdate] Check error: {}", e);
+        if let Err(e) = check_and_update_from_server().await {
+            debug!("[AutoUpdate] Server check error: {}", e);
         }
         tokio::time::sleep(check_interval).await;
     }
 }
 
-pub async fn check_and_update() -> anyhow::Result<bool> {
-    if Path::new(".git").exists() {
-        update_via_git().await
-    } else {
-        update_via_api().await
-    }
-}
-
-async fn detect_git_branch() -> String {
-    if let Ok(output) = tokio::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .await
-    {
-        if output.status.success() {
-            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !branch.is_empty() && branch != "HEAD" {
-                return branch;
-            }
-        }
-    }
-    "RUSTerization".to_string()
-}
-
-async fn update_via_git() -> anyhow::Result<bool> {
-    let branch = detect_git_branch().await;
-
-    // 1. Fetch latest commits from remote origin
-    let fetch_status = tokio::process::Command::new("git")
-        .args(["fetch", "origin", &branch])
-        .output()
-        .await?;
-
-    if !fetch_status.status.success() {
+pub async fn check_and_update_from_server() -> anyhow::Result<bool> {
+    let cfg = crate::ws_worker::load_worker_config();
+    if cfg.master_url.is_empty() || cfg.worker_token.is_empty() {
         return Ok(false);
     }
 
-    // 2. Compare local HEAD with remote tracking ref
-    let local_out = tokio::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .await?;
-    let local_sha = String::from_utf8_lossy(&local_out.stdout).trim().to_string();
+    // Convert ws://127.0.0.1:8000/ws/workers -> http://127.0.0.1:8000
+    let base_url = cfg.master_url
+        .replace("ws://", "http://")
+        .replace("wss://", "https://")
+        .split("/ws/")
+        .next()
+        .unwrap_or(&cfg.master_url)
+        .trim_end_matches('/')
+        .to_string();
 
-    let remote_out = tokio::process::Command::new("git")
-        .args(["rev-parse", &format!("origin/{}", branch)])
-        .output()
-        .await?;
-    let remote_sha = String::from_utf8_lossy(&remote_out.stdout).trim().to_string();
-
-    if local_sha.is_empty() || remote_sha.is_empty() || local_sha == remote_sha {
-        return Ok(false);
-    }
-
-    info!(
-        "🔄 [AutoUpdate] New version detected on GitHub ({} -> {})! Restarting to apply update...",
-        &local_sha[..7.min(local_sha.len())],
-        &remote_sha[..7.min(remote_sha.len())]
-    );
-
-    // Process exits cleanly; start_worker supervisor pulls the update and restarts
-    std::process::exit(0);
-}
-
-async fn update_via_api() -> anyhow::Result<bool> {
-    let sha_path = PathBuf::from(".current_commit");
-    let local_sha = if sha_path.exists() {
-        std::fs::read_to_string(&sha_path).unwrap_or_default().trim().to_string()
-    } else {
-        String::new()
-    };
+    #[cfg(windows)]
+    let platform = "windows";
+    #[cfg(not(windows))]
+    let platform = "linux";
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(15))
         .build()?;
 
-    let url = "https://api.github.com/repos/Garoika/tdc-worker/commits/RUSTerization";
+    let manifest_url = format!("{}/api/workers/update/manifest?platform={}", base_url, platform);
     let resp = client
-        .get(url)
-        .header("User-Agent", "TDC-Worker-AutoUpdater")
-        .header("Accept", "application/vnd.github.v3+json")
+        .get(&manifest_url)
+        .header("X-Worker-Token", &cfg.worker_token)
         .send()
         .await?;
 
@@ -107,47 +73,82 @@ async fn update_via_api() -> anyhow::Result<bool> {
         return Ok(false);
     }
 
-    let json_val: serde_json::Value = resp.json().await?;
-    let remote_sha = json_val.get("sha").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let manifest: UpdateManifest = resp.json().await?;
+    let mut updated_any = false;
 
-    if remote_sha.is_empty() {
-        return Ok(false);
-    }
+    for entry in manifest.files {
+        let file_name = Path::new(&entry.name).file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(&entry.name);
 
-    if local_sha.is_empty() {
-        let _ = std::fs::write(&sha_path, &remote_sha);
-        return Ok(false);
-    }
-
-    if local_sha != remote_sha {
-        info!(
-            "🔄 [AutoUpdate] New release detected on GitHub API ({} -> {})! Downloading binary...",
-            &local_sha[..7.min(local_sha.len())],
-            &remote_sha[..7.min(remote_sha.len())]
-        );
-
-        #[cfg(windows)]
-        let (bin_url, temp_bin) = (
-            "https://raw.githubusercontent.com/Garoika/tdc-worker/RUSTerization/tdc-worker.exe",
-            "tdc-worker.new.exe",
-        );
-        #[cfg(not(windows))]
-        let (bin_url, temp_bin) = (
-            "https://raw.githubusercontent.com/Garoika/tdc-worker/RUSTerization/tdc-worker",
-            "tdc-worker.new",
-        );
-
-        if let Ok(bin_resp) = client.get(bin_url).send().await {
-            if bin_resp.status().is_success() {
-                if let Ok(bytes) = bin_resp.bytes().await {
-                    let _ = std::fs::write(temp_bin, bytes);
-                }
-            }
+        if file_name.is_empty() {
+            continue;
         }
 
-        let _ = std::fs::write(&sha_path, &remote_sha);
+        let local_path = Path::new(file_name);
+        let matches = if local_path.exists() {
+            compute_file_sha256(local_path).map(|h| h.eq_ignore_ascii_case(&entry.sha256)).unwrap_or(false)
+        } else {
+            false
+        };
+
+        if !matches {
+            info!(
+                "📥 [AutoUpdate] New version of '{}' detected on server (hash: {}). Downloading...",
+                file_name, &entry.sha256[..8.min(entry.sha256.len())]
+            );
+
+            let download_url = format!(
+                "{}/api/workers/update/file?platform={}&filename={}",
+                base_url, platform, file_name
+            );
+
+            let file_resp = client
+                .get(&download_url)
+                .header("X-Worker-Token", &cfg.worker_token)
+                .send()
+                .await?;
+
+            if file_resp.status().is_success() {
+                let bytes = file_resp.bytes().await?;
+                let temp_name = if let Some(stem) = local_path.file_stem().and_then(|s| s.to_str()) {
+                    if let Some(ext) = local_path.extension().and_then(|e| e.to_str()) {
+                        format!("{}.new.{}", stem, ext)
+                    } else {
+                        format!("{}.new", stem)
+                    }
+                } else {
+                    format!("{}.new", file_name)
+                };
+
+                fs::write(&temp_name, bytes)?;
+                info!("✅ [AutoUpdate] Saved update as '{}'", temp_name);
+                updated_any = true;
+            } else {
+                warn!("[AutoUpdate] Failed to download '{}': HTTP {}", file_name, file_resp.status());
+            }
+        }
+    }
+
+    if updated_any {
+        info!("🚀 [AutoUpdate] All components updated successfully from server. Restarting process...");
         std::process::exit(0);
     }
 
     Ok(false)
+}
+
+fn compute_file_sha256(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        use std::io::Read;
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buffer[..n]),
+            Err(_) => return None,
+        }
+    }
+    Some(format!("{:x}", hasher.finalize()))
 }
