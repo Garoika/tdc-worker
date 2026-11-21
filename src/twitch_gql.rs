@@ -223,6 +223,59 @@ impl TwitchGqlClient {
         }))
     }
 
+    fn is_generic_drop_name(s: &str) -> bool {
+        let s_clean = s.trim().to_lowercase();
+        if s_clean.is_empty()
+            || s_clean == "drop"
+            || s_clean == "reward"
+            || s_clean == "item"
+            || s_clean == "reward item"
+            || s_clean == "test"
+        {
+            return true;
+        }
+        let parts: Vec<&str> = s_clean.split_whitespace().collect();
+        if parts.len() == 2 {
+            let prefix = parts[0];
+            let suffix = parts[1].trim_start_matches('#');
+            if (prefix == "drop" || prefix == "reward" || prefix == "item" || prefix == "tier")
+                && suffix.chars().all(|c| c.is_ascii_digit())
+            {
+                return true;
+            }
+        }
+        s_clean.chars().all(|c| c.is_ascii_digit())
+    }
+
+    fn extract_drop_item_name(d: &Value) -> String {
+        let mut benefits = Vec::new();
+        if let Some(edges) = d.get("benefitEdges").and_then(|v| v.as_array()) {
+            for edge in edges {
+                if let Some(name) = edge.pointer("/benefit/name").and_then(|v| v.as_str()) {
+                    let clean = name.trim();
+                    if !clean.is_empty() && !benefits.contains(&clean.to_string()) {
+                        benefits.push(clean.to_string());
+                    }
+                }
+            }
+        }
+
+        if !benefits.is_empty() {
+            return benefits.join(" + ");
+        }
+
+        let raw_name = d.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if !raw_name.is_empty() && !Self::is_generic_drop_name(raw_name) {
+            return raw_name.to_string();
+        }
+
+        if !raw_name.is_empty() {
+            return raw_name.to_string();
+        }
+
+        "Reward Item".to_string()
+    }
+
     pub async fn fetch_inventory_campaign_progress(
         &self,
         auth_token: &str,
@@ -244,6 +297,12 @@ impl TwitchGqlClient {
                       id
                       name
                       requiredMinutesWatched
+                      benefitEdges {
+                        benefit {
+                          id
+                          name
+                        }
+                      }
                       self {
                         isClaimed
                         currentMinutesWatched
@@ -316,7 +375,7 @@ impl TwitchGqlClient {
             let campaign_watched = max_watched.min(campaign_total);
             let campaign_percentage = ((campaign_watched as f64 / campaign_total as f64) * 100.0).round() as i32;
 
-            let mut active_drop_name = drops[0].get("name").and_then(|v| v.as_str()).unwrap_or("Drop 1").to_string();
+            let mut active_drop_name = Self::extract_drop_item_name(&drops[0]);
             let mut drop_index = 1;
             let first_req = drops[0].get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(60) as i32;
             let mut drop_required = first_req;
@@ -337,13 +396,13 @@ impl TwitchGqlClient {
 
                 if !is_claimed && cur < req {
                     all_done = false;
-                    active_drop_name = d.get("name").and_then(|v| v.as_str()).unwrap_or("Drop").to_string();
+                    active_drop_name = Self::extract_drop_item_name(d);
                     drop_index = (i + 1) as i32;
                     drop_required = cur_segment_req;
                     drop_watched = (campaign_watched - prev_req).max(0).min(drop_required);
                     break;
                 } else if i == drops.len() - 1 {
-                    active_drop_name = d.get("name").and_then(|v| v.as_str()).unwrap_or("Drop").to_string();
+                    active_drop_name = Self::extract_drop_item_name(d);
                     drop_index = drops.len() as i32;
                     drop_required = cur_segment_req;
                     drop_watched = cur_segment_req;
@@ -370,7 +429,7 @@ impl TwitchGqlClient {
             let mut campaign_watched = 0;
             let mut all_done = true;
             let mut active_idx = 1;
-            let mut active_name = drops[0].get("name").and_then(|v| v.as_str()).unwrap_or("Drop 1").to_string();
+            let mut active_name = Self::extract_drop_item_name(&drops[0]);
             let mut active_req = drops[0].get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(60) as i32;
             let mut active_watched = drops[0].pointer("/self/currentMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let mut found_active = false;
@@ -386,7 +445,7 @@ impl TwitchGqlClient {
                 if !found_active && !is_claimed && cur < req {
                     found_active = true;
                     active_idx = (i + 1) as i32;
-                    active_name = d.get("name").and_then(|v| v.as_str()).unwrap_or("Drop").to_string();
+                    active_name = Self::extract_drop_item_name(d);
                     active_req = req;
                     active_watched = cur;
                 }
