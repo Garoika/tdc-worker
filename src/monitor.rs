@@ -16,44 +16,24 @@ const WHITE: &str = "\x1b[37m";
 #[cfg(windows)]
 pub fn enable_windows_ansi() {
     extern "system" {
-        fn CreateFileW(
-            lpFileName: *const u16,
-            dwDesiredAccess: u32,
-            dwShareMode: u32,
-            lpSecurityAttributes: *mut std::ffi::c_void,
-            dwCreationDisposition: u32,
-            dwFlagsAndAttributes: u32,
-            hTemplateFile: *mut std::ffi::c_void,
-        ) -> *mut std::ffi::c_void;
         fn GetStdHandle(nStdHandle: i32) -> *mut std::ffi::c_void;
-        fn SetStdHandle(nStdHandle: i32, hHandle: *mut std::ffi::c_void) -> i32;
         fn GetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, lpMode: *mut u32) -> i32;
         fn SetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, dwMode: u32) -> i32;
         fn SetConsoleTitleW(lpConsoleTitle: *const u16) -> i32;
     }
     unsafe {
-        let conout: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
-        let h = CreateFileW(
-            conout.as_ptr(),
-            0x80000000 | 0x40000000,
-            1 | 2,
-            std::ptr::null_mut(),
-            3,
-            0,
-            std::ptr::null_mut(),
-        );
-        let handle = if !h.is_null() && h != (-1isize as *mut std::ffi::c_void) {
-            SetStdHandle(-11, h);
-            h
-        } else {
-            GetStdHandle(-11)
-        };
-
-        let mut mode: u32 = 0;
-        if GetConsoleMode(handle, &mut mode) != 0 {
-            SetConsoleMode(handle, mode | 0x0004 | 0x0008);
+        let handle = GetStdHandle(-11);
+        if !handle.is_null() && handle != (-1isize as *mut std::ffi::c_void) {
+            let mut mode: u32 = 0;
+            if GetConsoleMode(handle, &mut mode) != 0 {
+                // 0x0001 = ENABLE_PROCESSED_OUTPUT
+                // 0x0002 = ENABLE_WRAP_AT_EOL_OUTPUT
+                // 0x0004 = ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                // 0x0008 = DISABLE_NEWLINE_AUTO_RETURN
+                SetConsoleMode(handle, mode | 0x0001 | 0x0002 | 0x0004 | 0x0008);
+            }
         }
-        let title: Vec<u16> = "TDC Cluster — Live Worker Monitor\0".encode_utf16().collect();
+        let title: Vec<u16> = "TDC Cluster \u{2014} Live Worker Monitor\0".encode_utf16().collect();
         SetConsoleTitleW(title.as_ptr());
     }
 }
@@ -90,24 +70,16 @@ fn is_process_alive(pid: u32) -> bool {
 #[cfg(windows)]
 fn get_terminal_size() -> (usize, usize) {
     extern "system" {
-        fn CreateFileW(
-            lpFileName: *const u16,
-            dwDesiredAccess: u32,
-            dwShareMode: u32,
-            lpSecurityAttributes: *mut std::ffi::c_void,
-            dwCreationDisposition: u32,
-            dwFlagsAndAttributes: u32,
-            hTemplateFile: *mut std::ffi::c_void,
-        ) -> *mut std::ffi::c_void;
-        fn GetConsoleScreenBufferInfo(h: *mut std::ffi::c_void, info: *mut CONSOLE_SCREEN_BUFFER_INFO) -> i32;
-        fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
         fn GetStdHandle(nStdHandle: i32) -> *mut std::ffi::c_void;
+        fn GetConsoleScreenBufferInfo(h: *mut std::ffi::c_void, info: *mut CONSOLE_SCREEN_BUFFER_INFO) -> i32;
     }
     #[repr(C)]
     #[allow(dead_code)]
+    #[derive(Clone, Copy)]
     struct COORD { x: i16, y: i16 }
     #[repr(C)]
     #[allow(dead_code)]
+    #[derive(Clone, Copy)]
     struct SMALL_RECT { left: i16, top: i16, right: i16, bottom: i16 }
     #[repr(C)]
     #[allow(non_snake_case, dead_code)]
@@ -120,48 +92,34 @@ fn get_terminal_size() -> (usize, usize) {
     }
 
     unsafe {
-        let conout: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
-        let h = CreateFileW(
-            conout.as_ptr(),
-            0x80000000 | 0x40000000,
-            1 | 2,
-            std::ptr::null_mut(),
-            3,
-            0,
-            std::ptr::null_mut(),
-        );
-
-        let handle = if !h.is_null() && h != (-1isize as *mut std::ffi::c_void) {
-            h
-        } else {
-            GetStdHandle(-11)
-        };
-
+        let handle = GetStdHandle(-11);
         let mut info = std::mem::zeroed::<CONSOLE_SCREEN_BUFFER_INFO>();
         if GetConsoleScreenBufferInfo(handle, &mut info) != 0 {
-            let cols = (info.srWindow.right - info.srWindow.left + 1) as usize;
-            let rows = (info.srWindow.bottom - info.srWindow.top + 1) as usize;
-            if handle != GetStdHandle(-11) {
-                CloseHandle(handle);
-            }
-            return (cols.clamp(55, 240), rows.max(18));
-        }
-        if handle != GetStdHandle(-11) && !handle.is_null() && handle != (-1isize as *mut std::ffi::c_void) {
-            CloseHandle(handle);
+            let win_w = (info.srWindow.right - info.srWindow.left + 1) as usize;
+            let win_h = (info.srWindow.bottom - info.srWindow.top + 1) as usize;
+            return (win_w.clamp(55, 240), win_h.max(18));
         }
     }
-    (120, 30)
+    (100, 30)
 }
 
 #[cfg(not(windows))]
 fn get_terminal_size() -> (usize, usize) {
-    (120, 30)
+    (100, 30)
 }
 
 fn char_width(c: char) -> usize {
     let u = c as u32;
-    // East Asian Wide / Emoji detection
-    if (0x1F300..=0x1FAFF).contains(&u) || (0x2E80..=0x9FFF).contains(&u) {
+    // Fast path: ASCII printable is 1 cell
+    if (0x20..=0x7E).contains(&u) {
+        return 1;
+    }
+    // Zero-width combining marks
+    if (0x0300..=0x036F).contains(&u) || (0x1AB0..=0x1AFF).contains(&u) || (0x1DC0..=0x1DFF).contains(&u) || (0x20D0..=0x20FF).contains(&u) || (0xFE20..=0xFE2F).contains(&u) {
+        return 0;
+    }
+    // Wide emojis and East Asian Wide characters take 2 cells
+    if (0x1F300..=0x1FAFF).contains(&u) || (0x2E80..=0x9FFF).contains(&u) || (0xAC00..=0xD7AF).contains(&u) || (0xF900..=0xFAFF).contains(&u) {
         2
     } else {
         1
@@ -305,11 +263,11 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
 
         let mut lines = Vec::new();
 
-        // Exact header box geometry matching legacy Python monitor
+        // Exact box geometry matching legacy Python monitor
         let box_w = cols;
         let inner_w = box_w.saturating_sub(4).max(20);
 
-        let title = "TDC WORKER — LIVE MONITOR DASHBOARD";
+        let title = "TDC WORKER \u{2014} LIVE MONITOR DASHBOARD";
         let title_disp = if visible_len(title) > inner_w { "TDC MONITOR" } else { title };
         let t_vlen = visible_len(title_disp);
         let t_pad_left = (inner_w.saturating_sub(t_vlen)) / 2;
@@ -455,16 +413,15 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
             let footer = truncate_visible(&format!("Live (1s) • Auto-scaled ({}x{}) • Closes with worker", cols, rows), inner_w + 4);
             lines.push(format!(" {DIM}{footer}{RESET}"));
         } else {
+            lines.push(String::new());
             lines.push(format!(" {YELLOW}Waiting for worker process to initialize and write state...{RESET}"));
             lines.push(format!(" {DIM}If worker is running, telemetry will appear here momentarily.{RESET}"));
         }
 
         // Move cursor to top-left & clear
-        print!("\x1b[H\x1b[J");
         let mut stdout = io::stdout();
-        for line in &lines {
-            let _ = writeln!(stdout, "{}", line);
-        }
+        let payload = lines.join("\r\n");
+        let _ = write!(stdout, "\x1b[H\x1b[J{}\r\n", payload);
         let _ = stdout.flush();
 
         tokio::time::sleep(Duration::from_secs(1)).await;
