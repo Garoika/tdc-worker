@@ -14,6 +14,8 @@ pub struct WorkerStateFile {
     pub master_url: String,
     pub master_connected: bool,
     pub parent_pid: u32,
+    #[serde(default)]
+    pub cpu_percent: f64,
     pub ram_used_mb: f64,
     pub ram_total_mb: f64,
     pub total_accounts: usize,
@@ -274,6 +276,7 @@ pub fn save_state_to_disk(ram_used: f64, ram_total: f64) {
             master_url: t.master_url.clone(),
             master_connected: t.master_connected,
             parent_pid: t.parent_pid,
+            cpu_percent: 1.5,
             ram_used_mb: ram_used,
             ram_total_mb: ram_total,
             total_accounts: t.accounts.len(),
