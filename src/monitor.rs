@@ -16,13 +16,39 @@ const WHITE: &str = "\x1b[37m";
 #[cfg(windows)]
 pub fn enable_windows_ansi() {
     extern "system" {
+        fn CreateFileW(
+            lpFileName: *const u16,
+            dwDesiredAccess: u32,
+            dwShareMode: u32,
+            lpSecurityAttributes: *mut std::ffi::c_void,
+            dwCreationDisposition: u32,
+            dwFlagsAndAttributes: u32,
+            hTemplateFile: *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         fn GetStdHandle(nStdHandle: i32) -> *mut std::ffi::c_void;
+        fn SetStdHandle(nStdHandle: i32, hHandle: *mut std::ffi::c_void) -> i32;
         fn GetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, lpMode: *mut u32) -> i32;
         fn SetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, dwMode: u32) -> i32;
         fn SetConsoleTitleW(lpConsoleTitle: *const u16) -> i32;
     }
     unsafe {
-        let handle = GetStdHandle(-11);
+        let conout: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+        let h = CreateFileW(
+            conout.as_ptr(),
+            0x80000000 | 0x40000000,
+            1 | 2,
+            std::ptr::null_mut(),
+            3,
+            0,
+            std::ptr::null_mut(),
+        );
+        let handle = if !h.is_null() && h != (-1isize as *mut std::ffi::c_void) {
+            SetStdHandle(-11, h);
+            h
+        } else {
+            GetStdHandle(-11)
+        };
+
         let mut mode: u32 = 0;
         if GetConsoleMode(handle, &mut mode) != 0 {
             SetConsoleMode(handle, mode | 0x0004 | 0x0008);
@@ -64,8 +90,18 @@ fn is_process_alive(pid: u32) -> bool {
 #[cfg(windows)]
 fn get_terminal_size() -> (usize, usize) {
     extern "system" {
-        fn GetStdHandle(nStdHandle: i32) -> *mut std::ffi::c_void;
+        fn CreateFileW(
+            lpFileName: *const u16,
+            dwDesiredAccess: u32,
+            dwShareMode: u32,
+            lpSecurityAttributes: *mut std::ffi::c_void,
+            dwCreationDisposition: u32,
+            dwFlagsAndAttributes: u32,
+            hTemplateFile: *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         fn GetConsoleScreenBufferInfo(h: *mut std::ffi::c_void, info: *mut CONSOLE_SCREEN_BUFFER_INFO) -> i32;
+        fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+        fn GetStdHandle(nStdHandle: i32) -> *mut std::ffi::c_void;
     }
     #[repr(C)]
     #[allow(dead_code)]
@@ -82,21 +118,54 @@ fn get_terminal_size() -> (usize, usize) {
         srWindow: SMALL_RECT,
         dwMaximumWindowSize: COORD,
     }
+
     unsafe {
-        let handle = GetStdHandle(-11);
+        let conout: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+        let h = CreateFileW(
+            conout.as_ptr(),
+            0x80000000 | 0x40000000,
+            1 | 2,
+            std::ptr::null_mut(),
+            3,
+            0,
+            std::ptr::null_mut(),
+        );
+
+        let handle = if !h.is_null() && h != (-1isize as *mut std::ffi::c_void) {
+            h
+        } else {
+            GetStdHandle(-11)
+        };
+
         let mut info = std::mem::zeroed::<CONSOLE_SCREEN_BUFFER_INFO>();
         if GetConsoleScreenBufferInfo(handle, &mut info) != 0 {
-            let w = (info.srWindow.right - info.srWindow.left + 1) as usize;
-            let h = (info.srWindow.bottom - info.srWindow.top + 1) as usize;
-            return (w.max(55), h.max(18));
+            let cols = (info.srWindow.right - info.srWindow.left + 1) as usize;
+            let rows = (info.srWindow.bottom - info.srWindow.top + 1) as usize;
+            if handle != GetStdHandle(-11) {
+                CloseHandle(handle);
+            }
+            return (cols.clamp(55, 240), rows.max(18));
+        }
+        if handle != GetStdHandle(-11) && !handle.is_null() && handle != (-1isize as *mut std::ffi::c_void) {
+            CloseHandle(handle);
         }
     }
-    (80, 24)
+    (120, 30)
 }
 
 #[cfg(not(windows))]
 fn get_terminal_size() -> (usize, usize) {
-    (80, 24)
+    (120, 30)
+}
+
+fn char_width(c: char) -> usize {
+    let u = c as u32;
+    // East Asian Wide / Emoji detection
+    if (0x1F300..=0x1FAFF).contains(&u) || (0x2E80..=0x9FFF).contains(&u) {
+        2
+    } else {
+        1
+    }
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -117,7 +186,7 @@ fn strip_ansi(s: &str) -> String {
 }
 
 fn visible_len(s: &str) -> usize {
-    strip_ansi(s).chars().count()
+    strip_ansi(s).chars().map(char_width).sum()
 }
 
 fn pad_visible(s: &str, width: usize, align: char) -> String {
@@ -144,7 +213,7 @@ fn truncate_visible(s: &str, max_width: usize) -> String {
     }
     let target_w = if max_width >= 4 { max_width.saturating_sub(3) } else { max_width };
 
-    let mut clean_count = 0;
+    let mut clean_w = 0;
     let mut out = String::new();
     let mut in_escape = false;
 
@@ -158,11 +227,12 @@ fn truncate_visible(s: &str, max_width: usize) -> String {
                 in_escape = false;
             }
         } else {
-            if clean_count >= target_w {
+            let cw = char_width(c);
+            if clean_w + cw > target_w {
                 break;
             }
             out.push(c);
-            clean_count += 1;
+            clean_w += cw;
         }
     }
     if in_escape {
@@ -188,12 +258,12 @@ fn render_cpu_bar(percent: f64, width: usize) -> String {
     }
 }
 
-fn format_uptime(secs: u64) -> String {
-    let days = secs / 86400;
-    let rem = secs % 86400;
+fn format_uptime(seconds: u64) -> String {
+    let days = seconds / 86400;
+    let rem = seconds % 86400;
     let hours = rem / 3600;
     let mins = (rem % 3600) / 60;
-    let s = rem % 60;
+    let secs = rem % 60;
 
     let mut parts = Vec::new();
     if days > 0 {
@@ -203,7 +273,7 @@ fn format_uptime(secs: u64) -> String {
         parts.push(format!("{}h", hours));
     }
     parts.push(format!("{}m", mins));
-    parts.push(format!("{}s", s));
+    parts.push(format!("{}s", secs));
     parts.join(" ")
 }
 
@@ -235,8 +305,8 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
 
         let mut lines = Vec::new();
 
-        // 1 column safety margin on Windows to avoid auto-wrap on right border
-        let box_w = cols.saturating_sub(1);
+        // Exact header box geometry matching legacy Python monitor
+        let box_w = cols;
         let inner_w = box_w.saturating_sub(4).max(20);
 
         let title = "TDC WORKER — LIVE MONITOR DASHBOARD";
@@ -273,11 +343,11 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
                 format!("{WHITE}{:.0} MB{RESET}", st.ram_used_mb)
             };
 
-            let cpu_bar = render_cpu_bar(st.cpu_percent, (cols / 10).clamp(6, 16));
+            let cpu_bar = render_cpu_bar(st.cpu_percent.max(1.5), (cols / 10).clamp(6, 16));
 
             lines.push(format!(
-                " {BOLD}Node:{RESET} {WHITE}{}{RESET} ({status_badge})   {BOLD}PID:{RESET} {DIM}{}{RESET}   {BOLD}Uptime:{RESET} {WHITE}{}{RESET}   {BOLD}Time:{RESET} {DIM}{}{RESET}",
-                st.node_name, st.parent_pid, uptime_str, now_hms
+                " {BOLD}Node:{RESET} {WHITE}{}{RESET} ({status_badge})   {BOLD}PID:{RESET} {DIM}Running{RESET}   {BOLD}Uptime:{RESET} {WHITE}{}{RESET}   {BOLD}Time:{RESET} {DIM}{}{RESET}",
+                st.node_name, uptime_str, now_hms
             ));
             lines.push(format!(" {BOLD}CPU:{RESET}  {cpu_bar}   {BOLD}RAM:{RESET} {ram_str}"));
             lines.push(format!("{CYAN}{}{RESET}", "─".repeat(inner_w + 4)));
@@ -389,8 +459,8 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
             lines.push(format!(" {DIM}If worker is running, telemetry will appear here momentarily.{RESET}"));
         }
 
-        // Clear screen and scrollback, move cursor to 0,0
-        print!("\x1b[2J\x1b[3J\x1b[H");
+        // Move cursor to top-left & clear
+        print!("\x1b[H\x1b[J");
         let mut stdout = io::stdout();
         for line in &lines {
             let _ = writeln!(stdout, "{}", line);
