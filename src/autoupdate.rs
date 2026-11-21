@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 pub async fn start_autoupdate_loop(check_interval: Duration) {
     info!(
@@ -74,73 +74,13 @@ async fn update_via_git() -> anyhow::Result<bool> {
     }
 
     info!(
-        "🔄 [AutoUpdate] New version detected on GitHub ({} -> {})! Updating repository via git...",
+        "🔄 [AutoUpdate] New version detected on GitHub ({} -> {})! Restarting to apply update...",
         &local_sha[..7.min(local_sha.len())],
         &remote_sha[..7.min(remote_sha.len())]
     );
 
-    // 3. Reset local repository to match remote commit
-    let reset_status = tokio::process::Command::new("git")
-        .args(["reset", "--hard", &format!("origin/{}", branch)])
-        .output()
-        .await?;
-
-    if !reset_status.status.success() {
-        warn!("[AutoUpdate] git reset failed: {}", String::from_utf8_lossy(&reset_status.stderr));
-        return Ok(false);
-    }
-
-    // 4. If Cargo is available, compile fresh release binary locally
-    let has_cargo = tokio::process::Command::new("cargo")
-        .arg("--version")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if has_cargo {
-        info!("🔨 [AutoUpdate] Compiling updated release binary via cargo...");
-        let build_status = tokio::process::Command::new("cargo")
-            .args(["build", "--release"])
-            .output()
-            .await?;
-
-        if build_status.status.success() {
-            info!("✅ [AutoUpdate] Cargo release build succeeded. Applying updated binary...");
-            apply_new_binary();
-        } else {
-            warn!("[AutoUpdate] Cargo build failed: {}", String::from_utf8_lossy(&build_status.stderr));
-        }
-    }
-
-    info!("🚀 [AutoUpdate] Successfully updated to {}. Restarting worker process...", &remote_sha[..7.min(remote_sha.len())]);
-    restart_process();
-    Ok(true)
-}
-
-fn apply_new_binary() {
-    #[cfg(windows)]
-    {
-        let target_bin = Path::new("target/release/tdc-worker.exe");
-        let current_bin = Path::new("tdc-worker.exe");
-        let old_bin = Path::new("tdc-worker.old.exe");
-
-        if target_bin.exists() {
-            // On Windows: running .exe can be renamed, but not overwritten directly
-            let _ = std::fs::remove_file(old_bin);
-            let _ = std::fs::rename(current_bin, old_bin);
-            let _ = std::fs::copy(target_bin, current_bin);
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        let target_bin = Path::new("target/release/tdc-worker");
-        let current_bin = Path::new("tdc-worker");
-        if target_bin.exists() {
-            let _ = std::fs::copy(target_bin, current_bin);
-        }
-    }
+    // Process exits cleanly; start_worker supervisor pulls the update and restarts
+    std::process::exit(0);
 }
 
 async fn update_via_api() -> anyhow::Result<bool> {
@@ -181,20 +121,33 @@ async fn update_via_api() -> anyhow::Result<bool> {
 
     if local_sha != remote_sha {
         info!(
-            "🔄 [AutoUpdate] New release detected on GitHub API ({} -> {})! Restarting to apply update...",
+            "🔄 [AutoUpdate] New release detected on GitHub API ({} -> {})! Downloading binary...",
             &local_sha[..7.min(local_sha.len())],
             &remote_sha[..7.min(remote_sha.len())]
         );
+
+        #[cfg(windows)]
+        let (bin_url, temp_bin) = (
+            "https://raw.githubusercontent.com/Garoika/tdc-worker/RUSTerization/tdc-worker.exe",
+            "tdc-worker.new.exe",
+        );
+        #[cfg(not(windows))]
+        let (bin_url, temp_bin) = (
+            "https://raw.githubusercontent.com/Garoika/tdc-worker/RUSTerization/tdc-worker",
+            "tdc-worker.new",
+        );
+
+        if let Ok(bin_resp) = client.get(bin_url).send().await {
+            if bin_resp.status().is_success() {
+                if let Ok(bytes) = bin_resp.bytes().await {
+                    let _ = std::fs::write(temp_bin, bytes);
+                }
+            }
+        }
+
         let _ = std::fs::write(&sha_path, &remote_sha);
-        restart_process();
-        return Ok(true);
+        std::process::exit(0);
     }
 
     Ok(false)
-}
-
-fn restart_process() {
-    // Process exits cleanly with code 0.
-    // The supervising loop in start_worker.bat / start_worker.sh automatically restarts it.
-    std::process::exit(0);
 }

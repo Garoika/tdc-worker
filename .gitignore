@@ -10,8 +10,7 @@ desktop.ini
 .worker_state.json
 *.env
 
-# Rust Build Output & Binaries
+# Rust Build Output
 /target
-tdc-worker.exe
-tdc-worker
+tdc-worker.new*
 *.old.exe
