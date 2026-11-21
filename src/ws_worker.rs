@@ -238,7 +238,7 @@ async fn connect_and_serve(
                 let server_msg: ServerMessage = match serde_json::from_str(&msg) {
                     Ok(m) => m,
                     Err(e) => {
-                        debug!("Ignoring unhandled server message: {} | Error: {}", msg, e);
+                        warn!("Failed to parse server message: {} | Error: {}", msg, e);
                         continue;
                     }
                 };
@@ -410,6 +410,10 @@ async fn connect_and_serve(
                         }
                     }
                     ServerMessage::ApplyLimit { limit } => {
+                        max_containers = limit;
+                        info!("[NativeWorker] Max capacity updated to {}", limit);
+                    }
+                    ServerMessage::UpdateMaxContainers { max_containers: limit } => {
                         max_containers = limit;
                         info!("[NativeWorker] Max capacity updated to {}", limit);
                     }

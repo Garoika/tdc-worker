@@ -195,6 +195,10 @@ pub enum ServerMessage {
     ApplyLimit {
         limit: usize,
     },
+    #[serde(rename = "UPDATE_MAX_CONTAINERS")]
+    UpdateMaxContainers {
+        max_containers: usize,
+    },
     #[serde(other)]
     Unknown,
 }
