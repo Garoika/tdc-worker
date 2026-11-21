@@ -25,7 +25,7 @@ impl HlsWatcher {
 
     pub async fn resolve_media_playlist(&mut self, channel_login: &str, sig: &str, token: &str) -> Result<String> {
         let master_url = format!(
-            "https://usher.ttvnw.net/api/channel/hls/{}.m3u8?sig={}&token={}&allow_source=true&allow_audio_only=true",
+            "https://usher.ttvnw.net/api/channel/hls/{}.m3u8?sig={}&token={}&allow_source=true&allow_audio_only=true&fast_bread=true",
             urlencoding::encode(channel_login),
             urlencoding::encode(sig),
             urlencoding::encode(token)

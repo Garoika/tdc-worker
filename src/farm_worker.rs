@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -70,8 +71,12 @@ pub async fn run_account_worker(
     let mut total_spades: u32 = 0;
     let mut total_hls_segments: u32 = 0;
     let mut current_streamer: Option<StreamerChannel> = None;
+    let mut streamer_blacklist: HashMap<String, std::time::Instant> = HashMap::new();
 
     while !cancel_token.is_cancelled() {
+        // Expire blacklisted streamers older than 15 minutes
+        streamer_blacklist.retain(|_, added| added.elapsed() < Duration::from_secs(900));
+
         // Find a live streamer for target game if not watching
         if current_streamer.is_none() {
             let mut chosen = None;
@@ -79,6 +84,10 @@ pub async fn run_account_worker(
             if !priority_streamers.is_empty() {
                 // If priority streamers are specified, ONLY check them. Never fall back to game directory.
                 for p_login in &priority_streamers {
+                    let p_lower = p_login.trim().to_lowercase();
+                    if streamer_blacklist.contains_key(&p_lower) {
+                        continue;
+                    }
                     if let Ok(Some(channel)) = gql.fetch_streamer_by_login(&account.auth_token, p_login).await {
                         if gql.verify_channel_drops(&account.auth_token, &channel.id, &target_game).await {
                             info!("[{}] Selected priority drops streamer: {} (Channel ID: {})", acc_tag, channel.login, channel.id);
@@ -89,7 +98,7 @@ pub async fn run_account_worker(
                 }
 
                 if chosen.is_none() {
-                    warn!("[{}] None of priority streamers {:?} are live with drops for '{}'. Retrying in 30s...", acc_tag, priority_streamers, target_game);
+                    warn!("[{}] None of priority streamers {:?} are available/live with drops for '{}'. Retrying in 30s...", acc_tag, priority_streamers, target_game);
                     tokio::time::sleep(Duration::from_secs(30)).await;
                     continue;
                 }
@@ -99,6 +108,10 @@ pub async fn run_account_worker(
                 match gql.fetch_streamers_for_game(&account.auth_token, &target_game).await {
                     Ok(streamers) if !streamers.is_empty() => {
                         for s in &streamers {
+                            let s_lower = s.login.trim().to_lowercase();
+                            if streamer_blacklist.contains_key(&s_lower) {
+                                continue;
+                            }
                             if gql.verify_channel_drops(&account.auth_token, &s.id, &target_game).await {
                                 chosen = Some(s.clone());
                                 break;
@@ -106,7 +119,7 @@ pub async fn run_account_worker(
                         }
 
                         if chosen.is_none() {
-                            warn!("[{}] Found {} live streamer(s) with 'Drops Enabled' badge, but none have active WATCH campaigns for '{}'. Retrying in 30s...", acc_tag, streamers.len(), target_game);
+                            warn!("[{}] Found {} live streamer(s), but none are available or have active drops for '{}'. Retrying in 30s...", acc_tag, streamers.len(), target_game);
                             tokio::time::sleep(Duration::from_secs(30)).await;
                             continue;
                         }
@@ -232,15 +245,17 @@ pub async fn run_account_worker(
                                     }
                                 }
                                 Err(err) => {
-                                    warn!("[{}] Failed to resolve HLS playlist for {}: {}", acc_tag, chosen.login, err);
-                                    tokio::time::sleep(Duration::from_secs(10)).await;
+                                    warn!("[{}] Failed to resolve HLS playlist for {}: {}. Rotating streamer...", acc_tag, chosen.login, err);
+                                    streamer_blacklist.insert(chosen.login.to_lowercase(), std::time::Instant::now());
+                                    tokio::time::sleep(Duration::from_secs(2)).await;
                                     continue;
                                 }
                             }
                         }
                         Err(err) => {
-                            warn!("[{}] Failed to fetch playback token for {}: {}", acc_tag, chosen.login, err);
-                            tokio::time::sleep(Duration::from_secs(10)).await;
+                            warn!("[{}] Playback token rejected for {}: {}. Rotating streamer...", acc_tag, chosen.login, err);
+                            streamer_blacklist.insert(chosen.login.to_lowercase(), std::time::Instant::now());
+                            tokio::time::sleep(Duration::from_secs(2)).await;
                             continue;
                         }
                     }
@@ -265,7 +280,8 @@ pub async fn run_account_worker(
                     debug!("[{}] HLS poll error: {}", acc_tag, err);
                     hls_err_count += 1;
                     if hls_err_count >= 3 {
-                        warn!("[{}] Streamer '{}' HLS stream ended or unreachable. Leaving channel...", acc_tag, streamer.login);
+                        warn!("[{}] Streamer '{}' HLS stream ended or unreachable. Rotating...", acc_tag, streamer.login);
+                        streamer_blacklist.insert(streamer.login.to_lowercase(), std::time::Instant::now());
                         current_streamer = None;
                         break;
                     }

@@ -178,6 +178,15 @@ impl TwitchGqlClient {
             return Err(anyhow!("Playback token or signature is empty"));
         }
 
+        // Check if stream playback is forbidden (e.g. mature/age-restricted, geoblocked, etc.)
+        if let Ok(parsed_val) = serde_json::from_str::<Value>(&value) {
+            let is_forbidden = parsed_val.pointer("/authorization/forbidden").and_then(|v| v.as_bool()).unwrap_or(false);
+            if is_forbidden {
+                let reason = parsed_val.pointer("/authorization/reason").and_then(|v| v.as_str()).unwrap_or("restricted");
+                return Err(anyhow!("Stream playback forbidden by Twitch (reason: '{}')", reason));
+            }
+        }
+
         Ok(PlaybackToken { value, signature })
     }
 
