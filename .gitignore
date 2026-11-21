@@ -30,3 +30,4 @@ worker/.worker_state.json
 worker/.monitor.pid
 tdc-worker.exe
 farmer_bin/tdc-farm-rust*
+/target
