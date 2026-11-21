@@ -5,6 +5,8 @@ mod spade;
 mod farm_worker;
 mod ws_worker;
 pub mod logger;
+pub mod state_writer;
+pub mod monitor;
 
 use std::collections::HashMap;
 use std::fs;
@@ -67,6 +69,16 @@ fn get_process_memory_mb() -> f64 {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+
+    // 0. If explicit monitor mode requested -> run live companion dashboard monitor!
+    if args.iter().any(|a| a == "--monitor") {
+        let parent_pid = args
+            .windows(2)
+            .find(|w| w[0] == "--parent-pid")
+            .and_then(|w| w[1].parse::<u32>().ok());
+
+        return monitor::run_monitor_loop(parent_pid).await;
+    }
 
     // 1. If explicit IPC mode requested
     if args.iter().any(|a| a == "--ipc") {

@@ -106,12 +106,35 @@ pub fn load_worker_config() -> WorkerConfigFile {
     }
 }
 
+#[cfg(windows)]
+pub fn try_launch_monitor_window() {
+    if std::env::var("NO_MONITOR").is_ok() {
+        return;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        use std::os::windows::process::CommandExt;
+        let my_pid = std::process::id();
+        let _ = std::process::Command::new(exe)
+            .arg("--monitor")
+            .arg("--parent-pid")
+            .arg(my_pid.to_string())
+            .creation_flags(0x00000010) // CREATE_NEW_CONSOLE
+            .spawn();
+    }
+}
+
+#[cfg(not(windows))]
+pub fn try_launch_monitor_window() {}
+
 pub async fn run_ws_worker() -> Result<()> {
     let cfg = load_worker_config();
 
     info!("=== TDC Pure Rust Native Worker v0.2.0 ===");
     info!("Master Server URL : {}", cfg.master_url);
     info!("Worker Token      : {}", if cfg.worker_token.is_empty() { "(empty)" } else { "********" });
+
+    try_launch_monitor_window();
+    crate::state_writer::update_connection_info(&cfg.master_url, false);
 
     let gql_client = TwitchGqlClient::new();
     let spade_client = SpadeClient::new();
@@ -156,6 +179,7 @@ async fn connect_and_serve(
         .context("WebSocket handshake failed")?;
 
     info!("Connected to TDC Master! HTTP status: {}", response.status());
+    crate::state_writer::update_connection_info(&cfg.master_url, true);
 
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
@@ -182,6 +206,7 @@ async fn connect_and_serve(
                     .as_secs();
 
                 let (ram_used, ram_total) = get_system_ram_mb();
+                crate::state_writer::save_state_to_disk(ram_used, ram_total);
 
                 let hb = json!({
                     "type": "HEARTBEAT",
@@ -202,6 +227,22 @@ async fn connect_and_serve(
 
             // Outgoing telemetry & status events from active accounts
             Some(evt) = event_rx.recv() => {
+                if let IpcEvent::TelemetryUpdate { account_login, game, telemetry, .. } = &evt {
+                    crate::state_writer::record_telemetry(
+                        account_login,
+                        game,
+                        telemetry.campaign_watched,
+                        telemetry.campaign_total,
+                        telemetry.campaign_percentage,
+                        telemetry.drop_index,
+                        telemetry.drop_total,
+                        telemetry.active_streamer.as_deref(),
+                        telemetry.is_actively_watching,
+                    );
+                    let (ram_u, ram_t) = get_system_ram_mb();
+                    crate::state_writer::save_state_to_disk(ram_u, ram_t);
+                }
+
                 let payload_str = match serde_json::to_string(&evt) {
                     Ok(s) => s,
                     Err(e) => {
@@ -248,6 +289,8 @@ async fn connect_and_serve(
                         if let Some(l) = limit {
                             max_containers = l;
                         }
+                        let n_str = name.clone().unwrap_or_default();
+                        crate::state_writer::update_node_registration(&n_str, max_containers);
                         info!("Master confirmed node registration: '{}' (limit: {})", name.unwrap_or_default(), max_containers);
                     }
                     ServerMessage::HeartbeatAck => {
@@ -328,6 +371,8 @@ async fn connect_and_serve(
                             ).await;
                         });
 
+                        crate::state_writer::register_job(&login, &target.game);
+
                         active_jobs.insert(job_id.clone(), ActiveJob {
                             account_id: account.id,
                             login,
@@ -380,6 +425,7 @@ async fn connect_and_serve(
 
                         if let Some(jid) = target_jid {
                             if let Some(job) = active_jobs.remove(&jid) {
+                                crate::state_writer::remove_job(&job.login);
                                 job.cancel_token.cancel();
                                 info!("[NativeWorker] Stopped account '{}' (job {})", job.login, &jid[..8.min(jid.len())]);
                                 let cid = format!("proc_{}", &jid[..8.min(jid.len())]);
@@ -397,6 +443,7 @@ async fn connect_and_serve(
                     ServerMessage::StopAllContainers => {
                         info!("[NativeWorker] Stopping all {} active container(s)...", active_jobs.len());
                         for (jid, job) in active_jobs.drain() {
+                            crate::state_writer::remove_job(&job.login);
                             job.cancel_token.cancel();
                             let cid = format!("proc_{}", &jid[..8.min(jid.len())]);
                             let stopped_evt = json!({
@@ -411,10 +458,12 @@ async fn connect_and_serve(
                     }
                     ServerMessage::ApplyLimit { limit } => {
                         max_containers = limit;
+                        crate::state_writer::update_node_registration("", limit);
                         info!("[NativeWorker] Max capacity updated to {}", limit);
                     }
                     ServerMessage::UpdateMaxContainers { max_containers: limit } => {
                         max_containers = limit;
+                        crate::state_writer::update_node_registration("", limit);
                         info!("[NativeWorker] Max capacity updated to {}", limit);
                     }
                     ServerMessage::GetContainerLogs { request_id, job_id: _, container_id: _, login } => {
@@ -444,6 +493,7 @@ async fn connect_and_serve(
     for (_, job) in active_jobs.drain() {
         job.cancel_token.cancel();
     }
+    crate::state_writer::update_connection_info(&cfg.master_url, false);
 
     Ok(())
 }
