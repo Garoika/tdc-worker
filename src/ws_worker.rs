@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -189,12 +190,15 @@ pub async fn run_ws_worker() -> Result<()> {
     let gql_client = TwitchGqlClient::new();
     let spade_client = SpadeClient::new();
 
+    let (event_tx, mut event_rx) = mpsc::channel::<IpcEvent>(2000);
+    let active_jobs: Arc<Mutex<HashMap<String, ActiveJob>>> = Arc::new(Mutex::new(HashMap::new()));
+
     let mut retry_delay = 1u64;
 
     loop {
         info!("Connecting to TDC Master Server at {}...", cfg.master_url);
 
-        match connect_and_serve(&cfg, &gql_client, &spade_client).await {
+        match connect_and_serve(&cfg, &gql_client, &spade_client, event_tx.clone(), &mut event_rx, Arc::clone(&active_jobs)).await {
             Ok(()) => {
                 info!("WebSocket connection closed gracefully. Reconnecting in 2s...");
                 retry_delay = 2;
@@ -215,6 +219,9 @@ async fn connect_and_serve(
     cfg: &WorkerConfigFile,
     gql_client: &TwitchGqlClient,
     spade_client: &SpadeClient,
+    event_tx: mpsc::Sender<IpcEvent>,
+    event_rx: &mut mpsc::Receiver<IpcEvent>,
+    active_jobs: Arc<Mutex<HashMap<String, ActiveJob>>>,
 ) -> Result<()> {
     let mut request = cfg.master_url.as_str().into_client_request()
         .context("Invalid master URL")?;
@@ -235,14 +242,25 @@ async fn connect_and_serve(
 
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
-    let (event_tx, mut event_rx) = mpsc::channel::<IpcEvent>(2000);
-    let mut active_jobs: HashMap<String, ActiveJob> = HashMap::new();
     let mut max_containers: usize = 100;
 
-    // 1. Send initial SYNC_STATE
+    // 1. Send initial SYNC_STATE reporting currently running containers
+    let containers: Vec<serde_json::Value> = {
+        let lock = active_jobs.lock().await;
+        lock.iter().map(|(jid, job)| {
+            json!({
+                "name": format!("tdc-farm-{}", &jid[..8.min(jid.len())]),
+                "container_id": format!("proc_{}", &jid[..8.min(jid.len())]),
+                "job_id": jid,
+                "login": job.login,
+                "account_id": job.account_id,
+                "status": "running"
+            })
+        }).collect()
+    };
     let sync_msg = json!({
         "type": "SYNC_STATE",
-        "containers": []
+        "containers": containers
     });
     ws_tx.send(Message::Text(sync_msg.to_string().into())).await?;
 
@@ -260,10 +278,11 @@ async fn connect_and_serve(
                 let (ram_used, ram_total) = get_system_ram_mb();
                 crate::state_writer::save_state_to_disk(ram_used, ram_total);
 
+                let active_count = active_jobs.lock().await.len();
                 let hb = json!({
                     "type": "HEARTBEAT",
                     "timestamp": now_epoch,
-                    "current_containers": active_jobs.len(),
+                    "current_containers": active_count,
                     "metrics": {
                         "cpu_usage_percent": 1.0,
                         "ram_used_mb": ram_used,
@@ -295,6 +314,11 @@ async fn connect_and_serve(
                     );
                     let (ram_u, ram_t) = get_system_ram_mb();
                     crate::state_writer::save_state_to_disk(ram_u, ram_t);
+                } else if let IpcEvent::ContainerEvent { job_id, status, .. } = &evt {
+                    if status == "stopped" || status == "failed" {
+                        active_jobs.lock().await.remove(job_id);
+                        crate::state_writer::remove_job(job_id);
+                    }
                 }
 
                 let payload_str = match serde_json::to_string(&evt) {
@@ -351,8 +375,9 @@ async fn connect_and_serve(
                         debug!("HEARTBEAT_ACK received");
                     }
                     ServerMessage::SpawnContainer { job_id, account, target } => {
-                        if active_jobs.len() >= max_containers {
-                            warn!("Capacity limit reached ({}/{}). Rejecting job {}", active_jobs.len(), max_containers, job_id);
+                        let active_count = active_jobs.lock().await.len();
+                        if active_count >= max_containers {
+                            warn!("Capacity limit reached ({}/{}). Rejecting job {}", active_count, max_containers, job_id);
                             let cid = format!("proc_{}", &job_id[..8.min(job_id.len())]);
                             let reject_evt = json!({
                                 "type": "CONTAINER_EVENT",
@@ -374,9 +399,12 @@ async fn connect_and_serve(
 
                         info!("[NativeWorker] Spawning account '{}' for job {} (Game: '{}')", login, &job_id[..8.min(job_id.len())], target.game);
 
-                        if let Some(old) = active_jobs.remove(&job_id) {
-                            crate::state_writer::remove_job(&job_id);
-                            old.cancel_token.cancel();
+                        {
+                            let mut lock = active_jobs.lock().await;
+                            if let Some(old) = lock.remove(&job_id) {
+                                crate::state_writer::remove_job(&job_id);
+                                old.cancel_token.cancel();
+                            }
                         }
 
                         let child_token = CancellationToken::new();
@@ -428,11 +456,14 @@ async fn connect_and_serve(
 
                         crate::state_writer::register_job(&job_id, &login, &target.game);
 
-                        active_jobs.insert(job_id.clone(), ActiveJob {
-                            account_id: account.id,
-                            login,
-                            cancel_token: child_token,
-                        });
+                        {
+                            let mut lock = active_jobs.lock().await;
+                            lock.insert(job_id.clone(), ActiveJob {
+                                account_id: account.id,
+                                login,
+                                cancel_token: child_token,
+                            });
+                        }
 
                         let spawned_evt = json!({
                             "type": "CONTAINER_EVENT",
@@ -445,11 +476,12 @@ async fn connect_and_serve(
                     }
                     ServerMessage::StopContainer { job_id, container_id, account_id, login } => {
                         let mut target_jid = job_id;
+                        let mut lock = active_jobs.lock().await;
 
                         if target_jid.is_none() && container_id.is_some() {
                             let cid_val = container_id.as_ref().unwrap();
                             let clean_cid = cid_val.replace("proc_", "").replace("tdc-farm-", "");
-                            for jid in active_jobs.keys() {
+                            for jid in lock.keys() {
                                 if jid.starts_with(&clean_cid) || jid == cid_val {
                                     target_jid = Some(jid.clone());
                                     break;
@@ -459,7 +491,7 @@ async fn connect_and_serve(
 
                         if target_jid.is_none() && account_id.is_some() {
                             let acc_val = account_id.as_ref().unwrap();
-                            for (jid, info) in &active_jobs {
+                            for (jid, info) in lock.iter() {
                                 if &info.account_id == acc_val {
                                     target_jid = Some(jid.clone());
                                     break;
@@ -469,7 +501,7 @@ async fn connect_and_serve(
 
                         if target_jid.is_none() && login.is_some() {
                             let log_val = login.as_ref().unwrap().to_lowercase();
-                            for (jid, info) in &active_jobs {
+                            for (jid, info) in lock.iter() {
                                 if info.login.to_lowercase() == log_val {
                                     target_jid = Some(jid.clone());
                                     break;
@@ -478,7 +510,7 @@ async fn connect_and_serve(
                         }
 
                         if let Some(jid) = target_jid {
-                            if let Some(job) = active_jobs.remove(&jid) {
+                            if let Some(job) = lock.remove(&jid) {
                                 crate::state_writer::remove_job(&jid);
                                 job.cancel_token.cancel();
                                 info!("[NativeWorker] Stopped account '{}' (job {})", job.login, &jid[..8.min(jid.len())]);
@@ -495,8 +527,9 @@ async fn connect_and_serve(
                         }
                     }
                     ServerMessage::StopAllContainers => {
-                        info!("[NativeWorker] Stopping all {} active container(s)...", active_jobs.len());
-                        for (jid, job) in active_jobs.drain() {
+                        let mut lock = active_jobs.lock().await;
+                        info!("[NativeWorker] Stopping all {} active container(s)...", lock.len());
+                        for (jid, job) in lock.drain() {
                             crate::state_writer::remove_job(&jid);
                             job.cancel_token.cancel();
                             let cid = format!("proc_{}", &jid[..8.min(jid.len())]);
@@ -543,10 +576,9 @@ async fn connect_and_serve(
         }
     }
 
-    // Cancel any active tasks when disconnected
-    for (_, job) in active_jobs.drain() {
-        job.cancel_token.cancel();
-    }
+    // Keep active tasks running across temporary WebSocket reconnects.
+    // They will report via SYNC_STATE upon reconnect, and the master server
+    // will send STOP_CONTAINER if any were reassigned to another worker.
     crate::state_writer::update_connection_info(&cfg.master_url, false);
 
     Ok(())
