@@ -161,6 +161,7 @@ pub async fn run_account_worker(
                                     let mut init_drop_idx = 1;
                                     let mut init_drop_tot = 1;
                                     let mut init_completed = false;
+                                    let mut init_claimed_drops = None;
 
                                     if let Ok(Some(camp_info)) = gql.fetch_inventory_campaign_progress(&account.auth_token, &target_game).await {
                                         init_camp_name = camp_info.campaign_name;
@@ -173,6 +174,9 @@ pub async fn run_account_worker(
                                         init_drop_idx = camp_info.drop_index;
                                         init_drop_tot = camp_info.drop_total;
                                         init_completed = camp_info.is_completed;
+                                        if !camp_info.earned_drops.is_empty() {
+                                            init_claimed_drops = Some(camp_info.earned_drops);
+                                        }
                                         info!(
                                             "[{}] Initial Progress: {} (Drop {}/{}) | {}/{} mins (Campaign: {}/{} mins, {:.1}%)",
                                             acc_tag, init_drop_name, init_drop_idx, init_drop_tot, init_drop_watched, init_drop_required, init_camp_watched, init_camp_total, init_pct
@@ -240,6 +244,7 @@ pub async fn run_account_worker(
                                                 active_streamer: Some(chosen_channel),
                                                 is_actively_watching: true,
                                                 is_completed: init_completed,
+                                                claimed_drops: init_claimed_drops,
                                             },
                                         }).await;
                                     }
@@ -325,6 +330,7 @@ pub async fn run_account_worker(
         let mut cur_drop_tot = 1;
         let mut camp_pct = 0.0;
         let mut is_done = false;
+        let mut cur_claimed_drops = None;
 
         if let Ok(Some(camp_info)) = gql.fetch_inventory_campaign_progress(&account.auth_token, &target_game).await {
             camp_name = camp_info.campaign_name;
@@ -337,6 +343,9 @@ pub async fn run_account_worker(
             cur_drop_tot = camp_info.drop_total;
             camp_pct = camp_info.campaign_percentage as f32;
             is_done = camp_info.is_completed;
+            if !camp_info.earned_drops.is_empty() {
+                cur_claimed_drops = Some(camp_info.earned_drops);
+            }
 
             info!(
                 "[{}] Progress: {} (Drop {}/{}) | {}/{} mins (Campaign: {}/{} mins, {:.1}%) | HLS segs: {} | Spades: {}",
@@ -452,6 +461,7 @@ pub async fn run_account_worker(
                     active_streamer: Some(streamer.login.clone()),
                     is_actively_watching: true,
                     is_completed: is_done,
+                    claimed_drops: cur_claimed_drops,
                 },
             }).await;
 

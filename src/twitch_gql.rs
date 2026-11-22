@@ -459,6 +459,22 @@ impl TwitchGqlClient {
                 }
             }
 
+            let mut earned_drops = Vec::new();
+            for d in drops {
+                let req = d.get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let cur = d.pointer("/self/currentMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let is_claimed = d.pointer("/self/isClaimed").and_then(|v| v.as_bool()).unwrap_or(false);
+                if is_claimed || (req > 0 && cur >= req) {
+                    let name = Self::extract_drop_item_name(d);
+                    let drop_id = d.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    earned_drops.push(crate::models::ClaimedDropItem {
+                        drop_name: name,
+                        drop_id,
+                        campaign_name: Some(campaign_name.clone()),
+                    });
+                }
+            }
+
             Some(CampaignProgressInfo {
                 campaign_name,
                 campaign_watched,
@@ -470,6 +486,7 @@ impl TwitchGqlClient {
                 drop_index,
                 drop_total: drops.len() as i32,
                 is_completed: all_done || campaign_watched >= campaign_total,
+                earned_drops,
             })
         } else {
             let mut campaign_total = 0;
@@ -505,6 +522,22 @@ impl TwitchGqlClient {
             campaign_total = campaign_total.max(1);
             let campaign_percentage = ((campaign_watched as f64 / campaign_total as f64) * 100.0).round() as i32;
 
+            let mut earned_drops = Vec::new();
+            for d in drops {
+                let req = d.get("requiredMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let cur = d.pointer("/self/currentMinutesWatched").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let is_claimed = d.pointer("/self/isClaimed").and_then(|v| v.as_bool()).unwrap_or(false);
+                if is_claimed || (req > 0 && cur >= req) {
+                    let name = Self::extract_drop_item_name(d);
+                    let drop_id = d.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    earned_drops.push(crate::models::ClaimedDropItem {
+                        drop_name: name,
+                        drop_id,
+                        campaign_name: Some(campaign_name.clone()),
+                    });
+                }
+            }
+
             Some(CampaignProgressInfo {
                 campaign_name,
                 campaign_watched,
@@ -516,6 +549,7 @@ impl TwitchGqlClient {
                 drop_index: active_idx,
                 drop_total: drops.len() as i32,
                 is_completed: all_done || campaign_watched >= campaign_total,
+                earned_drops,
             })
         }
     }

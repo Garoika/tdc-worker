@@ -57,6 +57,15 @@ pub struct DropCurrentSession {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimedDropItem {
+    pub drop_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub campaign_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CampaignProgressInfo {
     pub campaign_name: String,
     pub campaign_watched: i32,
@@ -68,6 +77,8 @@ pub struct CampaignProgressInfo {
     pub drop_index: i32,
     pub drop_total: i32,
     pub is_completed: bool,
+    #[serde(default)]
+    pub earned_drops: Vec<ClaimedDropItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +169,8 @@ pub struct TelemetryPayload {
     pub active_streamer: Option<String>,
     pub is_actively_watching: bool,
     pub is_completed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_drops: Option<Vec<ClaimedDropItem>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
