@@ -98,8 +98,8 @@ pub async fn run_account_worker(
                 }
 
                 if chosen.is_none() {
-                    warn!("[{}] None of priority streamers {:?} are available/live with drops for '{}'. Retrying in 30s...", acc_tag, priority_streamers, target_game);
-                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    warn!("[{}] None of priority streamers {:?} are available/live with drops for '{}'. Retrying in 60s...", acc_tag, priority_streamers, target_game);
+                    tokio::time::sleep(Duration::from_secs(60)).await;
                     continue;
                 }
             } else {
@@ -119,8 +119,8 @@ pub async fn run_account_worker(
                         }
 
                         if chosen.is_none() {
-                            warn!("[{}] Found {} live streamer(s), but none are available or have active drops for '{}'. Retrying in 30s...", acc_tag, streamers.len(), target_game);
-                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            warn!("[{}] Found {} live streamer(s), but none are available or have active drops for '{}'. Retrying in 60s...", acc_tag, streamers.len(), target_game);
+                            tokio::time::sleep(Duration::from_secs(60)).await;
                             continue;
                         }
 
@@ -128,13 +128,13 @@ pub async fn run_account_worker(
                         info!("[{}] Selected verified drops streamer: {} (Channel ID: {})", acc_tag, c.login, c.id);
                     }
                     Ok(_) => {
-                        info!("[{}] No live streamers found for game '{}'. Retrying in 30s...", acc_tag, target_game);
-                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        info!("[{}] No live streamers found for game '{}'. Retrying in 60s...", acc_tag, target_game);
+                        tokio::time::sleep(Duration::from_secs(60)).await;
                         continue;
                     }
                     Err(err) => {
-                        warn!("[{}] Error searching streamers for '{}': {}. Retrying in 20s...", acc_tag, target_game, err);
-                        tokio::time::sleep(Duration::from_secs(20)).await;
+                        warn!("[{}] Error searching streamers for '{}': {}. Retrying in 60s...", acc_tag, target_game, err);
+                        tokio::time::sleep(Duration::from_secs(60)).await;
                         continue;
                     }
                 }
