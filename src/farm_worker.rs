@@ -27,11 +27,22 @@ pub async fn run_account_worker(
         format!("token_{}...", &account.auth_token[..account.auth_token.len().min(8)])
     };
 
+    let jitter_ms = job_id.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64)) % 5000;
+    if jitter_ms > 0 {
+        tokio::select! {
+            _ = cancel_token.cancelled() => return,
+            _ = tokio::time::sleep(Duration::from_millis(jitter_ms)) => {}
+        }
+    }
+
     info!("[{}] Authenticating account via Twitch GQL...", acc_tag);
 
     let (user_id, login) = match gql.validate_token(&account.auth_token).await {
         Ok(res) => res,
         Err(err) => {
+            if cancel_token.is_cancelled() {
+                return;
+            }
             error!("[{}] Token validation failed: {}", acc_tag, err);
             if let Some(tx) = &status_tx {
                 let _ = tx.send(AccountRuntimeStatus {

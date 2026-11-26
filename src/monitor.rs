@@ -361,7 +361,7 @@ pub async fn run_monitor_loop(parent_pid: Option<u32>) -> anyhow::Result<()> {
                     "─".repeat(w_game), "─".repeat(w_acc), "─".repeat(w_streamers), "─".repeat(w_time)
                 ));
 
-                for (g_name, g_info) in &st.games {
+                for (g_name, g_info) in st.ordered_games() {
                     let cnt = g_info.count;
                     let is_active = g_info.is_active;
                     let st_list = if !g_info.streamers.is_empty() {

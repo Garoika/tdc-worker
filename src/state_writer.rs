@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -20,12 +20,24 @@ pub struct WorkerStateFile {
     pub ram_total_mb: f64,
     pub total_accounts: usize,
     pub max_containers: usize,
-    pub games: HashMap<String, GameStateInfo>,
+    pub games: BTreeMap<String, GameStateInfo>,
     pub recent_events: Vec<String>,
+}
+
+impl WorkerStateFile {
+    pub fn ordered_games(&self) -> Vec<(&String, &GameStateInfo)> {
+        let mut items: Vec<(&String, &GameStateInfo)> = self.games.iter().collect();
+        items.sort_by(|(name_a, a), (name_b, b)| {
+            a.order.cmp(&b.order).then_with(|| name_a.cmp(name_b))
+        });
+        items
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameStateInfo {
+    #[serde(default)]
+    pub order: u64,
     pub count: usize,
     pub active_count: usize,
     pub waiting_count: usize,
@@ -59,9 +71,141 @@ pub struct StateTracker {
     pub master_connected: bool,
     pub max_containers: usize,
     pub parent_pid: u32,
-    pub accounts: HashMap<String, AccountTelemetryState>,
+    pub accounts: BTreeMap<String, AccountTelemetryState>,
+    pub game_order: Vec<String>,
     pub recent_events: Vec<String>,
     last_saved: u64,
+}
+
+impl StateTracker {
+    fn new(start_time: u64, parent_pid: u32) -> Self {
+        Self {
+            start_time,
+            node_name: "Worker Node".to_string(),
+            master_url: String::new(),
+            master_connected: false,
+            max_containers: 100,
+            parent_pid,
+            accounts: BTreeMap::new(),
+            game_order: Vec::new(),
+            recent_events: Vec::new(),
+            last_saved: 0,
+        }
+    }
+
+    fn ensure_game_registered(&mut self, game: &str) {
+        if !game.is_empty() && !self.game_order.iter().any(|g| g == game) {
+            self.game_order.push(game.to_string());
+        }
+    }
+
+    fn register(&mut self, job_id: &str, login: &str, game: &str) {
+        self.ensure_game_registered(game);
+        self.accounts.entry(job_id.to_string()).or_insert_with(|| AccountTelemetryState {
+            login: login.to_string(),
+            game: game.to_string(),
+            streamer: String::new(),
+            watched_mins: 0,
+            required_mins: 60,
+            percent: 0,
+            drop_index: 1,
+            drop_total: 1,
+            is_actively_watching: false,
+        });
+    }
+
+    fn remove(&mut self, job_id: &str) {
+        if let Some(removed) = self.accounts.remove(job_id) {
+            if !self.accounts.values().any(|a| a.game == removed.game) {
+                self.game_order.retain(|g| g != &removed.game);
+            }
+        }
+    }
+
+    fn build_state_file(&mut self, now: u64, ram_used: f64, ram_total: f64) -> WorkerStateFile {
+        let mut games_map: BTreeMap<String, GameStateInfo> = BTreeMap::new();
+
+        for acc in self.accounts.values() {
+            let g = games_map.entry(acc.game.clone()).or_insert_with(|| GameStateInfo {
+                order: 0,
+                count: 0,
+                active_count: 0,
+                waiting_count: 0,
+                is_active: false,
+                streamers: Vec::new(),
+                min_watched: i32::MAX,
+                required_minutes: 60,
+                left_minutes: 60,
+                time_left: "Searching...".to_string(),
+                drop_index: 1,
+                drop_total: 1,
+            });
+
+            g.count += 1;
+            if acc.is_actively_watching && !acc.streamer.is_empty() {
+                g.active_count += 1;
+                g.is_active = true;
+                if !g.streamers.contains(&acc.streamer) && g.streamers.len() < 5 {
+                    g.streamers.push(acc.streamer.clone());
+                }
+            } else {
+                g.waiting_count += 1;
+            }
+
+            if acc.watched_mins < g.min_watched {
+                g.min_watched = acc.watched_mins;
+            }
+            if acc.required_mins > 0 {
+                g.required_minutes = acc.required_mins;
+            }
+            g.drop_index = acc.drop_index;
+            g.drop_total = acc.drop_total;
+        }
+
+        for g in games_map.values_mut() {
+            if g.min_watched == i32::MAX {
+                g.min_watched = 0;
+            }
+            g.left_minutes = (g.required_minutes - g.min_watched).max(0);
+            if g.is_active {
+                g.time_left = format_duration_en(g.left_minutes);
+            } else {
+                g.time_left = "Searching...".to_string();
+            }
+        }
+
+        self.game_order.retain(|g| games_map.contains_key(g));
+        for game_name in games_map.keys() {
+            if !self.game_order.iter().any(|g| g == game_name) {
+                self.game_order.push(game_name.clone());
+            }
+        }
+        for (idx, game_name) in self.game_order.iter().enumerate() {
+            if let Some(g) = games_map.get_mut(game_name) {
+                g.order = idx as u64;
+            }
+        }
+
+        let uptime = now.saturating_sub(self.start_time);
+        self.last_saved = now;
+
+        WorkerStateFile {
+            updated_at: now,
+            start_time: self.start_time,
+            uptime_seconds: uptime,
+            node_name: self.node_name.clone(),
+            master_url: self.master_url.clone(),
+            master_connected: self.master_connected,
+            parent_pid: self.parent_pid,
+            cpu_percent: 1.5,
+            ram_used_mb: ram_used,
+            ram_total_mb: ram_total,
+            total_accounts: self.accounts.len(),
+            max_containers: self.max_containers,
+            games: games_map,
+            recent_events: self.recent_events.clone(),
+        }
+    }
 }
 
 static TRACKER: OnceLock<Mutex<StateTracker>> = OnceLock::new();
@@ -69,17 +213,7 @@ static TRACKER: OnceLock<Mutex<StateTracker>> = OnceLock::new();
 fn get_tracker() -> &'static Mutex<StateTracker> {
     TRACKER.get_or_init(|| {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-        Mutex::new(StateTracker {
-            start_time: now,
-            node_name: "Worker Node".to_string(),
-            master_url: "".to_string(),
-            master_connected: false,
-            max_containers: 100,
-            parent_pid: std::process::id(),
-            accounts: HashMap::new(),
-            recent_events: Vec::new(),
-            last_saved: 0,
-        })
+        Mutex::new(StateTracker::new(now, std::process::id()))
     })
 }
 
@@ -125,23 +259,13 @@ pub fn update_node_registration(name: &str, limit: usize) {
 
 pub fn register_job(job_id: &str, login: &str, game: &str) {
     if let Ok(mut t) = get_tracker().lock() {
-        t.accounts.entry(job_id.to_string()).or_insert_with(|| AccountTelemetryState {
-            login: login.to_string(),
-            game: game.to_string(),
-            streamer: String::new(),
-            watched_mins: 0,
-            required_mins: 60,
-            percent: 0,
-            drop_index: 1,
-            drop_total: 1,
-            is_actively_watching: false,
-        });
+        t.register(job_id, login, game);
     }
 }
 
 pub fn remove_job(job_id: &str) {
     if let Ok(mut t) = get_tracker().lock() {
-        t.accounts.remove(job_id);
+        t.remove(job_id);
     }
 }
 
@@ -159,6 +283,7 @@ pub fn record_telemetry(
     drop_name: Option<&str>,
 ) {
     if let Ok(mut t) = get_tracker().lock() {
+        t.ensure_game_registered(game);
         let entry = t.accounts.entry(job_id.to_string()).or_insert_with(|| AccountTelemetryState {
             login: login.to_string(),
             game: game.to_string(),
@@ -234,76 +359,7 @@ pub fn save_state_to_disk(ram_used: f64, ram_total: f64) {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
 
     let state_file = if let Ok(mut t) = get_tracker().lock() {
-        // Compute game aggregates
-        let mut games_map: HashMap<String, GameStateInfo> = HashMap::new();
-
-        for acc in t.accounts.values() {
-            let g = games_map.entry(acc.game.clone()).or_insert_with(|| GameStateInfo {
-                count: 0,
-                active_count: 0,
-                waiting_count: 0,
-                is_active: false,
-                streamers: Vec::new(),
-                min_watched: i32::MAX,
-                required_minutes: 60,
-                left_minutes: 60,
-                time_left: "Searching...".to_string(),
-                drop_index: 1,
-                drop_total: 1,
-            });
-
-            g.count += 1;
-            if acc.is_actively_watching && !acc.streamer.is_empty() {
-                g.active_count += 1;
-                g.is_active = true;
-                if !g.streamers.contains(&acc.streamer) && g.streamers.len() < 5 {
-                    g.streamers.push(acc.streamer.clone());
-                }
-            } else {
-                g.waiting_count += 1;
-            }
-
-            if acc.watched_mins < g.min_watched {
-                g.min_watched = acc.watched_mins;
-            }
-            if acc.required_mins > 0 {
-                g.required_minutes = acc.required_mins;
-            }
-            g.drop_index = acc.drop_index;
-            g.drop_total = acc.drop_total;
-        }
-
-        for g in games_map.values_mut() {
-            if g.min_watched == i32::MAX {
-                g.min_watched = 0;
-            }
-            g.left_minutes = (g.required_minutes - g.min_watched).max(0);
-            if g.is_active {
-                g.time_left = format_duration_en(g.left_minutes);
-            } else {
-                g.time_left = "Searching...".to_string();
-            }
-        }
-
-        let uptime = now.saturating_sub(t.start_time);
-        t.last_saved = now;
-
-        WorkerStateFile {
-            updated_at: now,
-            start_time: t.start_time,
-            uptime_seconds: uptime,
-            node_name: t.node_name.clone(),
-            master_url: t.master_url.clone(),
-            master_connected: t.master_connected,
-            parent_pid: t.parent_pid,
-            cpu_percent: 1.5,
-            ram_used_mb: ram_used,
-            ram_total_mb: ram_total,
-            total_accounts: t.accounts.len(),
-            max_containers: t.max_containers,
-            games: games_map,
-            recent_events: t.recent_events.clone(),
-        }
+        t.build_state_file(now, ram_used, ram_total)
     } else {
         return;
     };
@@ -314,5 +370,90 @@ pub fn save_state_to_disk(ram_used: f64, ram_total: f64) {
         if fs::write(tmp, &json_bytes).is_ok() {
             let _ = fs::rename(tmp, target);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn game_names(state: &WorkerStateFile) -> Vec<&str> {
+        state.ordered_games().into_iter().map(|(name, _)| name.as_str()).collect()
+    }
+
+    #[test]
+    fn preserves_game_arrival_order_across_rebuilds() {
+        let mut tracker = StateTracker::new(100, 1);
+        tracker.register("j1", "u1", "Zenless Zone Zero");
+        tracker.register("j2", "u2", "Escape from Tarkov");
+        tracker.register("j3", "u3", "Apex Legends");
+        tracker.register("j4", "u4", "Escape from Tarkov");
+
+        let state1 = tracker.build_state_file(110, 100.0, 1000.0);
+        assert_eq!(
+            game_names(&state1),
+            vec!["Zenless Zone Zero", "Escape from Tarkov", "Apex Legends"]
+        );
+
+        let json = serde_json::to_string(&state1).unwrap();
+        let parsed: WorkerStateFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            game_names(&parsed),
+            vec!["Zenless Zone Zero", "Escape from Tarkov", "Apex Legends"]
+        );
+    }
+
+    #[test]
+    fn keeps_game_position_until_last_account_leaves_then_appends_on_rearrival() {
+        let mut tracker = StateTracker::new(100, 1);
+        tracker.register("j1", "u1", "Game B");
+        tracker.register("j2", "u2", "Game A");
+        tracker.register("j3", "u3", "Game B");
+
+        tracker.remove("j1");
+        let s1 = tracker.build_state_file(105, 0.0, 0.0);
+        assert_eq!(game_names(&s1), vec!["Game B", "Game A"]);
+
+        tracker.remove("j3");
+        let s2 = tracker.build_state_file(106, 0.0, 0.0);
+        assert_eq!(game_names(&s2), vec!["Game A"]);
+
+        tracker.register("j4", "u4", "Game B");
+        let s3 = tracker.build_state_file(107, 0.0, 0.0);
+        assert_eq!(game_names(&s3), vec!["Game A", "Game B"]);
+    }
+
+    #[test]
+    fn deserializes_legacy_state_without_order_deterministically() {
+        let legacy_json = r#"{
+            "updated_at": 100,
+            "start_time": 90,
+            "uptime_seconds": 10,
+            "node_name": "n",
+            "master_url": "ws://localhost",
+            "master_connected": true,
+            "parent_pid": 1,
+            "ram_used_mb": 10.0,
+            "ram_total_mb": 100.0,
+            "total_accounts": 2,
+            "max_containers": 10,
+            "games": {
+                "Standoff 2": {
+                    "count": 1, "active_count": 1, "waiting_count": 0,
+                    "is_active": true, "streamers": [], "min_watched": 0,
+                    "required_minutes": 60, "left_minutes": 60,
+                    "time_left": "1h", "drop_index": 1, "drop_total": 1
+                },
+                "Escape from Tarkov": {
+                    "count": 1, "active_count": 1, "waiting_count": 0,
+                    "is_active": true, "streamers": [], "min_watched": 0,
+                    "required_minutes": 60, "left_minutes": 60,
+                    "time_left": "1h", "drop_index": 1, "drop_total": 1
+                }
+            },
+            "recent_events": []
+        }"#;
+        let parsed: WorkerStateFile = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(game_names(&parsed), vec!["Escape from Tarkov", "Standoff 2"]);
     }
 }

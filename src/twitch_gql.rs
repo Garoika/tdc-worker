@@ -53,29 +53,77 @@ impl TwitchGqlClient {
             "query": "query { currentUser { id login } }"
         });
 
-        let resp = self.http.post(GQL_URL)
-            .headers(Self::headers(auth_token))
-            .json(&body)
-            .send()
-            .await
-            .context("Network error during validate_token request")?;
+        let mut last_err = anyhow!("Unknown validate_token error");
+        let backoff_secs = [2u64, 4, 8, 12, 20];
 
-        if !resp.status().is_success() {
-            return Err(anyhow!("Twitch GQL HTTP error: {}", resp.status()));
+        for attempt in 0..=backoff_secs.len() {
+            let resp = match self.http.post(GQL_URL)
+                .headers(Self::headers(auth_token))
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = anyhow!("Network error during validate_token request: {}", e);
+                    if attempt < backoff_secs.len() {
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs[attempt])).await;
+                        continue;
+                    }
+                    return Err(last_err);
+                }
+            };
+
+            let status = resp.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(anyhow!("Twitch GQL HTTP 401 Unauthorized"));
+            }
+            if !status.is_success() {
+                last_err = anyhow!("Twitch GQL HTTP error: {}", status);
+                if attempt < backoff_secs.len() {
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs[attempt])).await;
+                    continue;
+                }
+                return Err(last_err);
+            }
+
+            let json_val: Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    last_err = anyhow!("Failed to parse validate_token JSON: {}", e);
+                    if attempt < backoff_secs.len() {
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs[attempt])).await;
+                        continue;
+                    }
+                    return Err(last_err);
+                }
+            };
+
+            if json_val.get("errors").is_some() && json_val.pointer("/data/currentUser").map(|v| v.is_null()).unwrap_or(true) {
+                last_err = anyhow!("Twitch GQL returned errors: {}", json_val["errors"]);
+                if attempt < backoff_secs.len() {
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs[attempt])).await;
+                    continue;
+                }
+                return Err(last_err);
+            }
+
+            let user = match json_val.pointer("/data/currentUser") {
+                Some(v) if !v.is_null() => v,
+                _ => return Err(anyhow!("Token invalid: currentUser is null")),
+            };
+
+            let id = user.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let login = user.get("login").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+
+            if id.is_empty() || login.is_empty() {
+                return Err(anyhow!("Invalid token: user ID or login missing"));
+            }
+
+            return Ok((id, login));
         }
 
-        let json_val: Value = resp.json().await.context("Failed to parse validate_token JSON")?;
-        let user = json_val.pointer("/data/currentUser")
-            .ok_or_else(|| anyhow!("Token invalid: currentUser is null"))?;
-
-        let id = user.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-        let login = user.get("login").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-
-        if id.is_empty() || login.is_empty() {
-            return Err(anyhow!("Invalid token: user ID or login missing"));
-        }
-
-        Ok((id, login))
+        Err(last_err)
     }
 
     pub async fn fetch_streamer_by_login(&self, auth_token: &str, login: &str) -> Result<Option<StreamerChannel>> {
