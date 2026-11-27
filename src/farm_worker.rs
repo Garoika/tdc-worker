@@ -37,38 +37,63 @@ pub async fn run_account_worker(
 
     info!("[{}] Authenticating account via Twitch GQL...", acc_tag);
 
-    let (user_id, login) = match gql.validate_token(&account.auth_token).await {
-        Ok(res) => res,
-        Err(err) => {
-            if cancel_token.is_cancelled() {
-                return;
-            }
-            error!("[{}] Token validation failed: {}", acc_tag, err);
-            if let Some(tx) = &status_tx {
-                let _ = tx.send(AccountRuntimeStatus {
-                    login: acc_tag.clone(),
-                    state: "INVALID_TOKEN".to_string(),
-                    current_game: "-".to_string(),
-                    current_channel: "-".to_string(),
-                    drop_name: "-".to_string(),
-                    progress_minutes: 0,
-                    required_minutes: 0,
-                    percent: 0.0,
-                    spade_count: 0,
-                    hls_segments_checked: 0,
-                }).await;
-            }
-            if let Some(tx) = &event_tx {
-                let cid = format!("proc_{}", &job_id[..8.min(job_id.len())]);
-                let _ = tx.send(IpcEvent::ContainerEvent {
-                    job_id: job_id.clone(),
-                    container_id: cid,
-                    event: "failed".to_string(),
-                    status: "failed".to_string(),
-                    error: Some(format!("Token validation failed: {}", err)),
-                }).await;
-            }
+    let mut had_auth_error = false;
+    let (user_id, login) = loop {
+        if cancel_token.is_cancelled() {
             return;
+        }
+        match gql.validate_token(&account.auth_token).await {
+            Ok(res) => {
+                if had_auth_error {
+                    if let Some(tx) = &event_tx {
+                        let cid = format!("proc_{}", &job_id[..8.min(job_id.len())]);
+                        let _ = tx.send(IpcEvent::ContainerEvent {
+                            job_id: job_id.clone(),
+                            container_id: cid,
+                            event: "spawned".to_string(),
+                            status: "running".to_string(),
+                            error: None,
+                        }).await;
+                    }
+                }
+                break res;
+            }
+            Err(err) => {
+                if cancel_token.is_cancelled() {
+                    return;
+                }
+                had_auth_error = true;
+                let err_text = format!("Token validation failed: {} (retrying in 30s)", err);
+                error!("[{}] {}", acc_tag, err_text);
+                if let Some(tx) = &status_tx {
+                    let _ = tx.send(AccountRuntimeStatus {
+                        login: acc_tag.clone(),
+                        state: "ERROR_RETRY".to_string(),
+                        current_game: target_game.clone(),
+                        current_channel: "-".to_string(),
+                        drop_name: "-".to_string(),
+                        progress_minutes: 0,
+                        required_minutes: 0,
+                        percent: 0.0,
+                        spade_count: 0,
+                        hls_segments_checked: 0,
+                    }).await;
+                }
+                if let Some(tx) = &event_tx {
+                    let cid = format!("proc_{}", &job_id[..8.min(job_id.len())]);
+                    let _ = tx.send(IpcEvent::ContainerEvent {
+                        job_id: job_id.clone(),
+                        container_id: cid,
+                        event: "error".to_string(),
+                        status: "running".to_string(),
+                        error: Some(err_text),
+                    }).await;
+                }
+                tokio::select! {
+                    _ = cancel_token.cancelled() => return,
+                    _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+                }
+            }
         }
     };
 

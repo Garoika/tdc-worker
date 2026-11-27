@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use anyhow::{Context, Result, anyhow};
 use reqwest::header::{HeaderMap, HeaderValue, HeaderName};
 use serde_json::{json, Value};
@@ -15,6 +15,7 @@ pub struct TwitchGqlClient {
     http: reqwest::Client,
     drops_cache: Arc<RwLock<HashMap<String, (Instant, bool)>>>,
     streamer_cache: Arc<RwLock<HashMap<String, (Instant, Option<StreamerChannel>)>>>,
+    auth_semaphore: Arc<Semaphore>,
 }
 
 impl TwitchGqlClient {
@@ -29,6 +30,7 @@ impl TwitchGqlClient {
             http,
             drops_cache: Arc::new(RwLock::new(HashMap::new())),
             streamer_cache: Arc::new(RwLock::new(HashMap::new())),
+            auth_semaphore: Arc::new(Semaphore::new(20)),
         }
     }
 
@@ -49,6 +51,7 @@ impl TwitchGqlClient {
     }
 
     pub async fn validate_token(&self, auth_token: &str) -> Result<(String, String)> {
+        let _permit = self.auth_semaphore.acquire().await.map_err(|e| anyhow!("Auth semaphore closed: {}", e))?;
         let body = json!({
             "query": "query { currentUser { id login } }"
         });

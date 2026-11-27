@@ -62,6 +62,7 @@ pub struct AccountTelemetryState {
     pub drop_index: i32,
     pub drop_total: i32,
     pub is_actively_watching: bool,
+    pub has_error: bool,
 }
 
 pub struct StateTracker {
@@ -111,6 +112,7 @@ impl StateTracker {
             drop_index: 1,
             drop_total: 1,
             is_actively_watching: false,
+            has_error: false,
         });
     }
 
@@ -124,6 +126,7 @@ impl StateTracker {
 
     fn build_state_file(&mut self, now: u64, ram_used: f64, ram_total: f64) -> WorkerStateFile {
         let mut games_map: BTreeMap<String, GameStateInfo> = BTreeMap::new();
+        let mut game_errors: BTreeMap<String, usize> = BTreeMap::new();
 
         for acc in self.accounts.values() {
             let g = games_map.entry(acc.game.clone()).or_insert_with(|| GameStateInfo {
@@ -142,6 +145,9 @@ impl StateTracker {
             });
 
             g.count += 1;
+            if acc.has_error {
+                *game_errors.entry(acc.game.clone()).or_insert(0) += 1;
+            }
             if acc.is_actively_watching && !acc.streamer.is_empty() {
                 g.active_count += 1;
                 g.is_active = true;
@@ -162,16 +168,22 @@ impl StateTracker {
             g.drop_total = acc.drop_total;
         }
 
-        for g in games_map.values_mut() {
+        for (game_name, g) in games_map.iter_mut() {
             if g.min_watched == i32::MAX {
                 g.min_watched = 0;
             }
             g.left_minutes = (g.required_minutes - g.min_watched).max(0);
-            if g.is_active {
-                g.time_left = format_duration_en(g.left_minutes);
+            let base_time = if g.is_active {
+                format_duration_en(g.left_minutes)
             } else {
-                g.time_left = "Searching...".to_string();
-            }
+                "Searching...".to_string()
+            };
+            let err_cnt = game_errors.get(game_name).copied().unwrap_or(0);
+            g.time_left = if err_cnt > 0 {
+                format!("{} ({} err)", base_time, err_cnt)
+            } else {
+                base_time
+            };
         }
 
         self.game_order.retain(|g| games_map.contains_key(g));
@@ -269,6 +281,35 @@ pub fn remove_job(job_id: &str) {
     }
 }
 
+pub fn record_error(job_id: &str, err_msg: &str) {
+    if let Ok(mut t) = get_tracker().lock() {
+        let (login, game) = if let Some(acc) = t.accounts.get_mut(job_id) {
+            acc.has_error = true;
+            acc.is_actively_watching = false;
+            (acc.login.clone(), acc.game.clone())
+        } else {
+            (job_id[..8.min(job_id.len())].to_string(), "Unknown".to_string())
+        };
+
+        let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let now_hms = format!("{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60);
+        let short_err: String = err_msg.chars().take(70).collect();
+        let evt = format!("[{}] [ERR] {} ({}): {}", now_hms, login, game, short_err);
+        t.recent_events.insert(0, evt);
+        if t.recent_events.len() > 30 {
+            t.recent_events.pop();
+        }
+    }
+}
+
+pub fn clear_error(job_id: &str) {
+    if let Ok(mut t) = get_tracker().lock() {
+        if let Some(acc) = t.accounts.get_mut(job_id) {
+            acc.has_error = false;
+        }
+    }
+}
+
 pub fn record_telemetry(
     job_id: &str,
     login: &str,
@@ -294,6 +335,7 @@ pub fn record_telemetry(
             drop_index: 1,
             drop_total: 1,
             is_actively_watching: false,
+            has_error: false,
         });
 
         entry.login = login.to_string();
@@ -311,6 +353,7 @@ pub fn record_telemetry(
             }
         }
         entry.is_actively_watching = is_watching;
+        entry.has_error = false;
 
         let now_hms = {
             let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();

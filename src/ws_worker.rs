@@ -314,10 +314,17 @@ async fn connect_and_serve(
                     );
                     let (ram_u, ram_t) = get_system_ram_mb();
                     crate::state_writer::save_state_to_disk(ram_u, ram_t);
-                } else if let IpcEvent::ContainerEvent { job_id, status, .. } = &evt {
+                } else if let IpcEvent::ContainerEvent { job_id, status, event, error, .. } = &evt {
                     if status == "stopped" || status == "failed" {
                         active_jobs.lock().await.remove(job_id);
                         crate::state_writer::remove_job(job_id);
+                    } else if event == "error" {
+                        let msg = error.as_deref().unwrap_or("Unknown error");
+                        crate::state_writer::record_error(job_id, msg);
+                        let (ram_u, ram_t) = get_system_ram_mb();
+                        crate::state_writer::save_state_to_disk(ram_u, ram_t);
+                    } else if event == "spawned" {
+                        crate::state_writer::clear_error(job_id);
                     }
                 }
 
